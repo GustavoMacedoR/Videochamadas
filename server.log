@@ -1,0 +1,49 @@
+nohup: ignorando entrada
+2026-01-12 21:28:06,752 INFO     Starting server at tcp:port=8000:interface=0.0.0.0
+2026-01-12 21:28:06,752 INFO     HTTP/2 support not enabled (install the http2 and tls Twisted extras)
+2026-01-12 21:28:06,753 INFO     Configuring endpoint tcp:port=8000:interface=0.0.0.0
+2026-01-12 21:28:06,753 INFO     Listening on TCP address 0.0.0.0:8000
+2026-01-13 01:33:16,115 INFO     Killed 0 pending application instances
+127.0.0.1:49662 - - [12/Jan/2026:21:28:22] "GET /client/test_call.html" 200 6879
+127.0.0.1:48954 - - [12/Jan/2026:21:28:35] "GET /client/test_call.html?room=teste456" 304 -
+127.0.0.1:48954 - - [12/Jan/2026:21:28:53] "GET /client/test_call.html?room=teste456" 304 -
+127.0.0.1:53490 - - [12/Jan/2026:21:28:56] "WSCONNECTING /ws/call/teste456/" - -
+127.0.0.1:53490 - - [12/Jan/2026:21:28:56] "WSCONNECT /ws/call/teste456/" - -
+127.0.0.1:53506 - - [12/Jan/2026:21:29:02] "WSCONNECTING /ws/call/teste456/" - -
+127.0.0.1:53506 - - [12/Jan/2026:21:29:02] "WSCONNECT /ws/call/teste456/" - -
+127.0.0.1:48954 - - [12/Jan/2026:21:29:43] "GET /client/test_call.html?room=teste456" 304 -
+127.0.0.1:37728 - - [12/Jan/2026:21:29:48] "WSCONNECTING /ws/call/teste456/" - -
+127.0.0.1:37728 - - [12/Jan/2026:21:29:48] "WSCONNECT /ws/call/teste456/" - -
+127.0.0.1:37728 - - [12/Jan/2026:21:30:11] "WSDISCONNECT /ws/call/teste456/" - -
+127.0.0.1:53506 - - [12/Jan/2026:21:32:29] "WSDISCONNECT /ws/call/teste456/" - -
+127.0.0.1:60782 - - [12/Jan/2026:21:32:29] "GET /client/test_call.html?room=teste456" 200 8908
+127.0.0.1:53490 - - [12/Jan/2026:21:32:34] "WSDISCONNECT /ws/call/teste456/" - -
+127.0.0.1:60782 - - [12/Jan/2026:21:32:34] "GET /client/test_call.html?room=teste456" 304 -
+127.0.0.1:60782 - - [12/Jan/2026:21:32:58] "GET /client/test_call.html?room=teste456" 304 -
+127.0.0.1:60782 - - [12/Jan/2026:21:33:04] "GET /client/test_call.html?room=teste456" 304 -
+127.0.0.1:43496 - - [12/Jan/2026:21:34:01] "WSCONNECTING /ws/call/teste456/" - -
+127.0.0.1:43496 - - [12/Jan/2026:21:34:01] "WSCONNECT /ws/call/teste456/" - -
+127.0.0.1:55142 - - [12/Jan/2026:21:34:05] "WSCONNECTING /ws/call/teste456/" - -
+127.0.0.1:55142 - - [12/Jan/2026:21:34:05] "WSCONNECT /ws/call/teste456/" - -
+127.0.0.1:44210 - - [12/Jan/2026:21:34:20] "WSCONNECTING /ws/call/teste456/" - -
+127.0.0.1:44210 - - [12/Jan/2026:21:34:20] "WSCONNECT /ws/call/teste456/" - -
+127.0.0.1:34546 - - [12/Jan/2026:21:34:26] "WSCONNECTING /ws/call/teste456/" - -
+127.0.0.1:34546 - - [12/Jan/2026:21:34:26] "WSCONNECT /ws/call/teste456/" - -
+127.0.0.1:34546 - - [12/Jan/2026:21:35:26] "WSDISCONNECT /ws/call/teste456/" - -
+127.0.0.1:44210 - - [12/Jan/2026:21:35:33] "WSDISCONNECT /ws/call/teste456/" - -
+127.0.0.1:55142 - - [12/Jan/2026:21:35:51] "WSDISCONNECT /ws/call/teste456/" - -
+127.0.0.1:43496 - - [12/Jan/2026:21:35:59] "WSDISCONNECT /ws/call/teste456/" - -
+127.0.0.1:59668 - - [12/Jan/2026:21:35:59] "GET /client/test_call.html?room=teste456" 304 -
+127.0.0.1:42582 - - [12/Jan/2026:23:09:18] "GET /client/rooms.html" 304 -
+127.0.0.1:42582 - - [12/Jan/2026:23:09:18] "GET /api/rooms/" 200 215
+127.0.0.1:42582 - - [12/Jan/2026:23:09:20] "GET /client/test_call.html?room=teste123" 200 8908
+127.0.0.1:42582 - - [12/Jan/2026:23:09:43] "GET /client/test_call.html?room=teste123" 200 8908
+127.0.0.1:48920 - - [12/Jan/2026:23:09:56] "WSCONNECTING /ws/call/teste123/" - -
+127.0.0.1:48920 - - [12/Jan/2026:23:09:56] "WSCONNECT /ws/call/teste123/" - -
+127.0.0.1:48924 - - [12/Jan/2026:23:10:00] "WSCONNECTING /ws/call/teste123/" - -
+127.0.0.1:48924 - - [12/Jan/2026:23:10:00] "WSCONNECT /ws/call/teste123/" - -
+127.0.0.1:44878 - - [12/Jan/2026:23:10:07] "WSCONNECTING /ws/call/teste123/" - -
+127.0.0.1:44878 - - [12/Jan/2026:23:10:07] "WSCONNECT /ws/call/teste123/" - -
+127.0.0.1:44878 - - [12/Jan/2026:23:10:27] "WSDISCONNECT /ws/call/teste123/" - -
+127.0.0.1:48924 - - [12/Jan/2026:23:10:30] "WSDISCONNECT /ws/call/teste123/" - -
+127.0.0.1:48920 - - [12/Jan/2026:23:10:35] "WSDISCONNECT /ws/call/teste123/" - -
