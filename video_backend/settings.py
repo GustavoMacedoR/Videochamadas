@@ -71,6 +71,10 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
+# Media files (recordings upload)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # Channels - use in-memory layer for simplicity (no Redis required)
 CHANNEL_LAYERS = {
     'default': {

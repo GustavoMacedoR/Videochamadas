@@ -3,3 +3,7 @@ channels>=4.0
 djangorestframework>=3.12
 # channels_redis is optional; in-memory layer is used by default
 # channels_redis>=4.0
+ 
+# For CouchDB initialization script
+python-dotenv>=1.0.0
+requests>=2.0.0
