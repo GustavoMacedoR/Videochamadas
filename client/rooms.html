@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Salas - Videochamadas</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;padding:12px}
+    #rooms{margin-top:12px}
+    .room{padding:8px;border:1px solid #ddd;margin:6px 0;display:flex;justify-content:space-between;align-items:center}
+    .room button{margin-left:8px}
+    form{display:flex;gap:8px;align-items:center}
+  </style>
+</head>
+<body>
+  <h2>Salas de Videochamada</h2>
+  <p>Esta página lista as salas via <strong>/api/rooms/</strong>. Ao criar/abrir uma sala, o cliente de chamada será aberto em outra aba.</p>
+
+  <form id="createForm">
+    <input id="nameInput" placeholder="Nome da sala (opcional)" />
+    <button type="submit">Criar Sala</button>
+    <button type="button" id="refreshBtn">Atualizar lista</button>
+  </form>
+
+  <div id="rooms">Carregando...</div>
+
+  <script>
+    // Ajuste a URL do backend se necessário
+    const BACKEND_API = (location.protocol === 'file:' ? 'http://127.0.0.1:8000' : `${location.protocol}//${location.hostname}:8000`) + '/api/rooms/';
+
+    const roomsEl = document.getElementById('rooms');
+    const createForm = document.getElementById('createForm');
+    const nameInput = document.getElementById('nameInput');
+    const refreshBtn = document.getElementById('refreshBtn');
+
+    async function listRooms(){
+      roomsEl.textContent = 'Carregando...';
+      try{
+        const res = await fetch(BACKEND_API, {credentials: 'include'});
+        if(!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderList(data);
+      }catch(e){
+        roomsEl.innerHTML = `<div style="color:#900">Erro ao listar salas: ${e.message}. Veja notas abaixo sobre CORS/servidor.</div>`;
+      }
+    }
+
+    function renderList(list){
+      if(!list || list.length === 0){
+        roomsEl.innerHTML = '<i>Nenhuma sala encontrada.</i>';
+        return;
+      }
+      roomsEl.innerHTML = '';
+      list.forEach(r => {
+        const div = document.createElement('div');
+        div.className = 'room';
+        const title = document.createElement('div');
+        title.textContent = (r.name || r.id) + ' — ' + new Date(r.created_at).toLocaleString();
+        const actions = document.createElement('div');
+        const openBtn = document.createElement('button');
+        openBtn.textContent = 'Abrir';
+        openBtn.onclick = () => openRoom(r);
+        actions.appendChild(openBtn);
+        div.appendChild(title);
+        div.appendChild(actions);
+        roomsEl.appendChild(div);
+      });
+    }
+
+    function openRoom(room){
+      const identifier = room.name || room.id;
+      const url = `test_call.html?room=${encodeURIComponent(identifier)}`;
+      window.open(url, '_blank');
+    }
+
+    createForm.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const name = nameInput.value.trim();
+      try{
+        const res = await fetch(BACKEND_API, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({name: name || ''}),
+          credentials: 'include'
+        });
+        if(!res.ok) throw new Error('HTTP ' + res.status);
+        const room = await res.json();
+        nameInput.value = '';
+        listRooms();
+        openRoom(room);
+      }catch(e){
+        alert('Falha ao criar sala: ' + e.message + '\n\nSe for erro de CORS, sirva este arquivo pelo mesmo host/porta do backend, ou habilite CORS no Django (ex: django-cors-headers).');
+      }
+    };
+
+    refreshBtn.onclick = listRooms;
+
+    // Notas rápidas sobre CORS/servir arquivos:
+    // - Se abrir este arquivo via file:// o fetch pode falhar por restrições do navegador.
+    // - Para evitar problemas, sirva a pasta `client/` com o mesmo host que o backend ou habilite CORS no Django.
+
+    // Inicializa
+    listRooms();
+  </script>
+</body>
+</html>
