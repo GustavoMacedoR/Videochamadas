@@ -6,7 +6,7 @@ const path = require('path');
 
 (async () => {
   const ROOM_URL = process.env.ROOM_URL;
-  const UPLOAD_URL = (process.env.NODE_URL || 'http://localhost:8000') + '/api/calls/recordings/';
+  const UPLOAD_URL = (process.env.NODE_URL || 'http://localhost:8000') + '/api/recordings/';
   const DURATION = parseInt(process.env.DURATION || '15000', 10);
   if (!ROOM_URL) {
     console.error('Please set ROOM_URL env var');

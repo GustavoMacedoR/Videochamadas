@@ -18,6 +18,11 @@
     <button id="startBtn">Start Call (criar offer)</button>
     <button id="hangupBtn">Hang Up</button>
     <span id="status" style="margin-left:12px;color:#444"></span>
+    <div style="margin-top:8px">
+      <button id="recordStartBtn">Iniciar Gravação</button>
+      <button id="recordStopBtn" disabled>Parar e Enviar</button>
+      <span id="recordStatus" style="margin-left:12px;color:#444"></span>
+    </div>
   </div>
 
   <script>
@@ -211,6 +216,108 @@
       remoteContainer.appendChild(v);
       return v;
     }
+
+    // Recording helpers
+    let _recorder = null;
+    let _recordChunks = [];
+    let _canvas = null;
+    let _rafId = null;
+    let _audioCtx = null;
+    let _dest = null;
+
+    function buildMixedCanvas(){
+      // create canvas to composite videos
+      const width = 1280, height = 720;
+      _canvas = document.createElement('canvas'); _canvas.width = width; _canvas.height = height; _canvas.style.display='none';
+      document.body.appendChild(_canvas);
+      const ctx = _canvas.getContext('2d');
+
+      function draw(){
+        ctx.fillStyle = '#111'; ctx.fillRect(0,0,width,height);
+        // place local on left and remote videos tiled
+        const vids = [localVideo].concat(Array.from(remoteContainer.querySelectorAll('video')));
+        const cols = 2; const rows = Math.ceil(vids.length/cols);
+        const cellW = Math.floor(width/cols); const cellH = Math.floor(height/rows);
+        vids.forEach((v,i)=>{
+          try{
+            const cx = (i%cols)*cellW; const cy = Math.floor(i/cols)*cellH;
+            ctx.drawImage(v, cx, cy, cellW, cellH);
+          }catch(e){}
+        });
+        _rafId = requestAnimationFrame(draw);
+      }
+      draw();
+    }
+
+    function startRecording(){
+      if(_recorder) return;
+      buildMixedCanvas();
+      // capture video from canvas
+      const vStream = _canvas.captureStream(30);
+      // mix audio from local and remote streams
+      try{
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        _dest = _audioCtx.createMediaStreamDestination();
+        // add local
+        if(localStream){
+          const src = _audioCtx.createMediaStreamSource(localStream);
+          src.connect(_dest);
+        }
+        // add remote audio tracks
+        Array.from(remoteContainer.querySelectorAll('video')).forEach(v=>{
+          if(v && v.srcObject){
+            try{
+              const src = _audioCtx.createMediaStreamSource(v.srcObject);
+              src.connect(_dest);
+            }catch(e){ console.warn('could not add remote audio source', e); }
+          }
+        });
+        const audioTracks = _dest.stream.getAudioTracks();
+        if(audioTracks && audioTracks.length) audioTracks.forEach(t=>vStream.addTrack(t));
+      }catch(e){ console.warn('Audio mixing failed', e); }
+
+      _recordChunks = [];
+      try{
+        _recorder = new MediaRecorder(vStream, {mimeType: 'video/webm;codecs=vp8,opus'});
+      }catch(e){ _recorder = new MediaRecorder(vStream); }
+      _recorder.ondataavailable = ev => { if(ev.data && ev.data.size) _recordChunks.push(ev.data); };
+      _recorder.onstop = async () => {
+        const blob = new Blob(_recordChunks, {type:'video/webm'});
+        // upload
+        const fd = new FormData();
+        fd.append('file', blob, `recording-${Date.now()}.webm`);
+        const uploadUrl = `${location.protocol}//${location.hostname}:${BACKEND_PORT}/api/recordings/`;
+        try{
+          document.getElementById('recordStatus').textContent = 'Enviando...';
+          const res = await fetch(uploadUrl, {method:'POST', body: fd});
+          const json = await res.json();
+          document.getElementById('recordStatus').textContent = res.ok ? ('Enviado: '+(json.file||json.id||'OK')) : ('Erro: '+(json.error||res.status));
+        }catch(e){ document.getElementById('recordStatus').textContent = 'Upload falhou: '+e.message; }
+        // cleanup
+        if(_canvas && _canvas.parentNode) _canvas.parentNode.removeChild(_canvas); _canvas = null;
+        if(_audioCtx && _audioCtx.close) _audioCtx.close(); _audioCtx = null; _dest = null;
+        _recorder = null; _recordChunks = [];
+        document.getElementById('recordStartBtn').disabled = false;
+        document.getElementById('recordStopBtn').disabled = true;
+      };
+      _recorder.start(1000);
+      document.getElementById('recordStatus').textContent = 'Gravando...';
+      document.getElementById('recordStartBtn').disabled = true;
+      document.getElementById('recordStopBtn').disabled = false;
+    }
+
+    function stopRecording(){
+      if(!_recorder) return;
+      try{ _recorder.stop(); }catch(e){}
+      if(_rafId) cancelAnimationFrame(_rafId); _rafId = null;
+      document.getElementById('recordStatus').textContent = 'Finalizando...';
+    }
+
+    document.getElementById('recordStartBtn').onclick = async () => {
+      await initLocalMedia();
+      startRecording();
+    };
+    document.getElementById('recordStopBtn').onclick = stopRecording;
   </script>
 </body>
 </html>
