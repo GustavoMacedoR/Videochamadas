@@ -36,6 +36,10 @@
     // Defaults
     const BACKEND_PORT = 8000; // ajuste se o runserver usar outra porta
     const WS_BASE_PATH = '/ws/calls/'; // changed to avoid conflict with existing /ws/
+    // Build API base to match where this file is served. If served under /video/ use /video/api/, else use same-origin /api/.
+    const API_ORIGIN = location.origin;
+    const API_PREFIX = location.pathname.startsWith('/video/') ? '/video' : '';
+    const BACKEND_API_BASE = (location.protocol === 'file:' ? `http://127.0.0.1:${BACKEND_PORT}` : (API_ORIGIN + API_PREFIX)) + '/api';
 
     const clientId = Math.random().toString(36).slice(2, 9);
     let localStream;
