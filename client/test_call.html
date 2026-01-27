@@ -54,7 +54,16 @@
         localVideo.srcObject = localStream;
         return;
       }catch(e){
-        console.warn('getUserMedia failed, using virtual fallback:', e);
+        console.error('getUserMedia failed, using virtual fallback:', e);
+        // show a clearer message in the page for debugging
+        document.getElementById('status').textContent = 'Local media: unavailable (' + (e.name || '') + ': ' + (e.message || '') + ')';
+        // expose permissions state if available
+        try{
+          if(navigator.permissions){
+            navigator.permissions.query({name:'camera'}).then(p => console.info('camera permission state:', p.state)).catch(()=>{});
+            navigator.permissions.query({name:'microphone'}).then(p => console.info('microphone permission state:', p.state)).catch(()=>{});
+          }
+        }catch(_){ }
         localStream = createFakeMediaStream();
         localVideo.srcObject = localStream;
       }
