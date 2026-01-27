@@ -7,3 +7,4 @@ djangorestframework>=3.12
 # For CouchDB initialization script
 python-dotenv>=1.0.0
 requests>=2.0.0
+channels_redis>=4.0

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    image: videochamadas:latest
+    restart: always
+    env_file: .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=video_backend.settings
+      - ALLOWED_HOSTS=*
+      - CHANNEL_REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - static_volume:/app/static
+      - media_volume:/app/media
+    command: ["sh", "/app/entrypoint.sh", "uvicorn", "video_backend.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+volumes:
+  static_volume:
+  media_volume:
+  redis_data:
