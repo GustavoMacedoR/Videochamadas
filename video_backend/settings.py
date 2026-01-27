@@ -71,6 +71,10 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
+# Where `manage.py collectstatic` will copy files to. Must be a filesystem path
+# and match the volume mounted by docker-compose (we use /app/static in compose).
+STATIC_ROOT = BASE_DIR / 'static'
+
 # Media files (recordings upload)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
