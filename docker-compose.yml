@@ -10,8 +10,9 @@ services:
       - DJANGO_SETTINGS_MODULE=video_backend.settings
       - ALLOWED_HOSTS=*
       - CHANNEL_REDIS_URL=redis://redis:6379/0
+    # Bind the web service to localhost on a non-conflicting port (use 8087)
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8087:8000"
     volumes:
       - static_volume:/app/static
       - media_volume:/app/media
@@ -22,8 +23,11 @@ services:
     restart: always
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
+    # Do not expose Redis on the host to avoid conflicts and for security;
+    # keep it reachable from other containers via the compose network.
+    # If you need host access, uncomment and change the host port.
+    # ports:
+    #   - "127.0.0.1:6380:6379"
 
 volumes:
   static_volume:
