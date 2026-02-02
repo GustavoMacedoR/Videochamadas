@@ -330,7 +330,7 @@
         // upload
         const fd = new FormData();
         fd.append('file', blob, `recording-${Date.now()}.webm`);
-        const uploadUrl = `${location.protocol}//${location.hostname}:${BACKEND_PORT}/api/recordings/`;
+        const uploadUrl = `${BACKEND_API_BASE}/recordings/`;
         try{
           document.getElementById('recordStatus').textContent = 'Enviando...';
           const res = await fetch(uploadUrl, {method:'POST', body: fd});

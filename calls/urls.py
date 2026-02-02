@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import RoomViewSet, CouchExampleView, CouchDocsList, CouchDocDetail, RecordingUploadView
+from .turn_view import TurnConfigView
 
 router = DefaultRouter()
 router.register(r'rooms', RoomViewSet, basename='room')
@@ -17,4 +18,5 @@ urlpatterns += [
 
 urlpatterns += [
     path('recordings/', RecordingUploadView.as_view(), name='recording-upload'),
+    path('turn/', TurnConfigView.as_view(), name='turn-config'),
 ]

@@ -13,7 +13,12 @@ const path = require('path');
     process.exit(1);
   }
 
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  // allow configuring fake media files via env: FAKE_VIDEO and FAKE_AUDIO (optional)
+  const extraArgs = ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'];
+  if (process.env.FAKE_VIDEO) extraArgs.push(`--use-file-for-fake-video-capture=${process.env.FAKE_VIDEO}`);
+  if (process.env.FAKE_AUDIO) extraArgs.push(`--use-file-for-fake-audio-capture=${process.env.FAKE_AUDIO}`);
+
+  const browser = await chromium.launch({ headless: true, args: extraArgs });
   const context = await browser.newContext({
     // grant permissions for microphone/camera
     permissions: ['microphone', 'camera']

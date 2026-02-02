@@ -29,6 +29,20 @@ services:
     # ports:
     #   - "127.0.0.1:6380:6379"
 
+  turn:
+    image: instrumentisto/coturn
+    restart: always
+    env_file: .env
+    environment:
+      - TURN_USER
+      - TURN_PASS
+      - PUBLIC_IP
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/tcp"
+    command: ["turnserver", "-n", "--no-dtls", "--no-tls", "--user=${TURN_USER}:${TURN_PASS}", "--realm=gerenciadorescolas.com.br", "--external-ip=${PUBLIC_IP}", "--min-port=49152", "--max-port=65535", "--verbose"]
+
 volumes:
   static_volume:
   media_volume:
