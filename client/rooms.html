@@ -14,7 +14,7 @@
 </head>
 <body>
   <h2>Salas de Videochamada</h2>
-  <p>Esta página lista as salas via <strong>/api/rooms/</strong>. Ao criar/abrir uma sala, o cliente de chamada será aberto em outra aba.</p>
+  <p>Esta página lista as salas via <strong>/video/api/rooms/</strong>. Ao criar/abrir uma sala, o cliente de chamada será aberto em outra aba.</p>
 
   <form id="createForm">
     <input id="nameInput" placeholder="Nome da sala (opcional)" />
@@ -26,10 +26,10 @@
 
   <script>
     // Ajuste a URL do backend se necessário
-    // If served under /video/ (via nginx proxy), use /video/api/, otherwise use same-origin /api/
+    // Sempre use o prefixo /video nas chamadas ao backend
     const ORIGIN = location.origin;
-    const PREFIX = location.pathname.startsWith('/video/') ? '/video' : '';
-    const BACKEND_API = (location.protocol === 'file:' ? 'http://127.0.0.1:8000' : (ORIGIN + PREFIX)) + '/api/rooms/';
+    const PREFIX = '/video';
+    const BACKEND_API = (location.protocol === 'file:' ? 'http://127.0.0.1:8000' + PREFIX : (ORIGIN + PREFIX)) + '/api/rooms/';
 
     const roomsEl = document.getElementById('rooms');
     const createForm = document.getElementById('createForm');

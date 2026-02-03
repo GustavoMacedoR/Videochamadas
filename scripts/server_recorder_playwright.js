@@ -2,7 +2,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-// Usage: NODE_URL=http://localhost:8000 ROOM_URL=http://localhost:8000/video/client/rooms/ROOM_NAME DURATION=15000 node scripts/server_recorder_playwright.js
+// Usage: NODE_URL=http://localhost:8000 ROOM_URL=http://localhost:8000/client/rooms/ROOM_NAME DURATION=15000 node scripts/server_recorder_playwright.js
 
 (async () => {
   const ROOM_URL = process.env.ROOM_URL;
