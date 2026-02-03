@@ -13,7 +13,7 @@ python manage.py runserver
 ```
 
 Endpoints úteis:
-- API Rooms: `/api/rooms/` (criar/listar)
+- API Rooms: `/video/api/rooms/` (criar/listar)
 - WebSocket signaling: `ws://<host>/ws/call/<room_name>/`
 
 Observações:

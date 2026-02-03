@@ -2,11 +2,11 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-// Usage: NODE_URL=http://localhost:8000 ROOM_URL=http://localhost:8000/client/rooms/ROOM_NAME DURATION=15000 node scripts/server_recorder_playwright.js
+// Usage: NODE_URL=http://localhost:8000 ROOM_URL=http://localhost:8000/video/client/rooms/ROOM_NAME DURATION=15000 node scripts/server_recorder_playwright.js
 
 (async () => {
   const ROOM_URL = process.env.ROOM_URL;
-  const UPLOAD_URL = (process.env.NODE_URL || 'http://localhost:8000') + '/api/recordings/';
+  const UPLOAD_URL = (process.env.NODE_URL || 'http://localhost:8000') + '/video/api/recordings/';
   const DURATION = parseInt(process.env.DURATION || '15000', 10);
   if (!ROOM_URL) {
     console.error('Please set ROOM_URL env var');
