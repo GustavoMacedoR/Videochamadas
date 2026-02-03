@@ -15,3 +15,9 @@ urlpatterns = [
     path('call/', lambda request: redirect('/client/test_call.html')),
     path('call/<str:room>/', lambda request, room: redirect(f'/client/test_call.html?room={room}')),
 ]
+
+# Serve media files during development when DEBUG=True
+if settings.DEBUG:
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+    ]

@@ -82,3 +82,23 @@ class RecordingUploadView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def get(self, request, format=None):
+        """List recordings with absolute file URLs."""
+        from .models import Recording
+        qs = Recording.objects.all().order_by('-created_at')
+        data = []
+        for r in qs:
+            file_url = r.file.url if r.file else None
+            if file_url and request is not None:
+                try:
+                    file_url = request.build_absolute_uri(file_url)
+                except Exception:
+                    pass
+            data.append({
+                'id': str(r.id),
+                'file': r.file.name if r.file else None,
+                'url': file_url,
+                'created_at': r.created_at,
+            })
+        return Response(data)
