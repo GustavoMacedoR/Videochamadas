@@ -12,4 +12,14 @@ class RoomSerializer(serializers.ModelSerializer):
 class RecordingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Recording
-        fields = ['id', 'file', 'created_at']
+        fields = [
+            'id',
+            'file',
+            'participants_json',
+            'minutes_status',
+            'minutes_text',
+            'minutes_error',
+            'minutes_generated_at',
+            'created_at',
+        ]
+        read_only_fields = ['minutes_status', 'minutes_text', 'minutes_error', 'minutes_generated_at']

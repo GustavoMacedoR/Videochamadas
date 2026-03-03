@@ -274,6 +274,7 @@
     let _recorderStopped = false;
     let _finalized = false;
     let _uploadFailed = false;
+    let _minutesPollTimer = null;
 
     function buildMixedCanvas(){
       // create canvas to composite videos
@@ -305,6 +306,10 @@
       fd.append('filename', _uploadFilename);
       fd.append('is_last', isLast ? '1' : '0');
       if(chunkBlob) fd.append('chunk', chunkBlob, _uploadFilename);
+      if(isLast){
+        const participants = [clientId].concat(Object.keys(peers));
+        fd.append('participants', JSON.stringify(participants));
+      }
 
       const uploadUrl = `${BACKEND_API_BASE}/recordings/chunk/`;
       const res = await fetch(uploadUrl, {method:'POST', body: fd});
@@ -320,7 +325,8 @@
       try{
         document.getElementById('recordStatus').textContent = 'Finalizando envio...';
         const json = await postChunk(null, true);
-        document.getElementById('recordStatus').textContent = 'Enviado: ' + (json.file || json.id || 'OK');
+        document.getElementById('recordStatus').textContent = 'Enviado: ' + (json.file || json.id || 'OK') + '. Gerando ata...';
+        if(json.id) startMinutesPolling(json.id, json.minutes_url);
       }catch(e){
         _uploadFailed = true;
         document.getElementById('recordStatus').textContent = 'Upload falhou: ' + e.message;
@@ -357,6 +363,39 @@
         _uploadInFlight = false;
       }
       await tryFinalizeUpload();
+    }
+
+    function startMinutesPolling(recordingId, minutesUrl){
+      if(_minutesPollTimer) clearTimeout(_minutesPollTimer);
+      const fallbackUrl = `${BACKEND_API_BASE}/recordings/${recordingId}/minutes/`;
+      const endpoint = minutesUrl || fallbackUrl;
+
+      const poll = async () => {
+        try{
+          const res = await fetch(endpoint);
+          const data = await res.json();
+          if(!res.ok){
+            document.getElementById('recordStatus').textContent = 'Falha ao consultar ata: ' + (data.error || res.status);
+            return;
+          }
+
+          if(data.minutes_status === 'done'){
+            document.getElementById('recordStatus').innerHTML = `Ata disponível: <a href="${endpoint}" target="_blank" rel="noopener">abrir ata</a>`;
+            return;
+          }
+          if(data.minutes_status === 'failed'){
+            document.getElementById('recordStatus').textContent = 'Falha ao gerar ata: ' + (data.minutes_error || 'erro desconhecido');
+            return;
+          }
+
+          document.getElementById('recordStatus').textContent = 'Ata em processamento...';
+          _minutesPollTimer = setTimeout(poll, 3000);
+        }catch(e){
+          document.getElementById('recordStatus').textContent = 'Erro ao consultar ata: ' + e.message;
+        }
+      };
+
+      poll();
     }
 
     function startRecording(){

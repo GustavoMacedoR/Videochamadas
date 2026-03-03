@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .models import Room
+from .models import Room, Recording
 from .serializers import RoomSerializer
 from .serializers import RecordingSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -13,6 +13,9 @@ from django.core.files.base import File
 from pathlib import Path
 from uuid import uuid4
 import os
+import json
+
+from .transcription import enqueue_minutes_generation
 
 
 class RoomViewSet(viewsets.ModelViewSet):
@@ -84,26 +87,38 @@ class RecordingUploadView(APIView):
     def post(self, request, format=None):
         serializer = RecordingSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            recording = serializer.save()
+            enqueue_minutes_generation(str(recording.id))
+            payload = serializer.data
+            payload['minutes_status'] = recording.minutes_status
+            payload['minutes_url'] = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/')
+            return Response(payload, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request, format=None):
         """List recordings with absolute file URLs."""
-        from .models import Recording
         qs = Recording.objects.all().order_by('-created_at')
         data = []
         for r in qs:
             file_url = r.file.url if r.file else None
+            minutes_url = None
             if file_url and request is not None:
                 try:
                     file_url = request.build_absolute_uri(file_url)
                 except Exception:
                     pass
+            if request is not None:
+                try:
+                    minutes_url = request.build_absolute_uri(f'/video/api/recordings/{r.id}/minutes/')
+                except Exception:
+                    minutes_url = None
             data.append({
                 'id': str(r.id),
                 'file': r.file.name if r.file else None,
                 'url': file_url,
+                'minutes_status': r.minutes_status,
+                'minutes_url': minutes_url,
+                'minutes_generated_at': r.minutes_generated_at,
                 'created_at': r.created_at,
             })
         return Response(data)
@@ -115,12 +130,11 @@ class RecordingChunkUploadView(APIView):
     permission_classes = (AllowAny,)
 
     def post(self, request, format=None):
-        from .models import Recording
-
         upload_id = request.data.get('upload_id')
         filename = request.data.get('filename') or f"recording-{uuid4().hex}.webm"
         is_last = str(request.data.get('is_last', '')).lower() in {'1', 'true', 'yes'}
         chunk = request.FILES.get('chunk')
+        participants_raw = request.data.get('participants', '')
 
         if not upload_id:
             return Response({'error': 'upload_id é obrigatório'}, status=status.HTTP_400_BAD_REQUEST)
@@ -142,8 +156,17 @@ class RecordingChunkUploadView(APIView):
             return Response({'error': 'nenhum dado recebido para finalizar upload'}, status=status.HTTP_400_BAD_REQUEST)
 
         safe_name = os.path.basename(str(filename)) or f"recording-{uuid4().hex}.webm"
+        participants_json = ''
+        if participants_raw:
+            try:
+                parsed = json.loads(participants_raw)
+                if isinstance(parsed, list):
+                    participants_json = json.dumps([str(item) for item in parsed])
+            except Exception:
+                participants_json = ''
+
         with open(temp_path, 'rb') as temp_file:
-            recording = Recording.objects.create(file=File(temp_file, name=safe_name))
+            recording = Recording.objects.create(file=File(temp_file, name=safe_name), participants_json=participants_json)
 
         try:
             if temp_path.exists():
@@ -152,7 +175,42 @@ class RecordingChunkUploadView(APIView):
             pass
 
         file_url = recording.file.url if recording.file else None
+        minutes_url = None
         if file_url and request is not None:
+            try:
+                file_url = request.build_absolute_uri(file_url)
+            except Exception:
+                pass
+        if request is not None:
+            try:
+                minutes_url = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/')
+            except Exception:
+                minutes_url = None
+
+        enqueue_minutes_generation(str(recording.id))
+
+        return Response({
+            'id': str(recording.id),
+            'file': recording.file.name if recording.file else None,
+            'url': file_url,
+            'minutes_status': recording.minutes_status,
+            'minutes_url': minutes_url,
+            'minutes_generated_at': recording.minutes_generated_at,
+            'created_at': recording.created_at,
+        }, status=status.HTTP_201_CREATED)
+
+
+class RecordingMinutesView(APIView):
+    permission_classes = (AllowAny,)
+
+    def get(self, request, recording_id):
+        try:
+            recording = Recording.objects.get(id=recording_id)
+        except Recording.DoesNotExist:
+            return Response({'error': 'gravação não encontrada'}, status=status.HTTP_404_NOT_FOUND)
+
+        file_url = recording.file.url if recording.file else None
+        if file_url:
             try:
                 file_url = request.build_absolute_uri(file_url)
             except Exception:
@@ -160,7 +218,9 @@ class RecordingChunkUploadView(APIView):
 
         return Response({
             'id': str(recording.id),
-            'file': recording.file.name if recording.file else None,
-            'url': file_url,
-            'created_at': recording.created_at,
-        }, status=status.HTTP_201_CREATED)
+            'recording_url': file_url,
+            'minutes_status': recording.minutes_status,
+            'minutes_generated_at': recording.minutes_generated_at,
+            'minutes_error': recording.minutes_error,
+            'minutes_text': recording.minutes_text,
+        })
