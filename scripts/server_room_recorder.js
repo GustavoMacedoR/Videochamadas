@@ -14,20 +14,38 @@ if (!ROOM_URL || !API_BASE || !UPLOAD_ID) {
 
 let stopping = false;
 
+async function postComplete(payload) {
+  try {
+    await fetch(`${API_BASE}/recordings/server/complete/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        room_name: ROOM_NAME,
+        recording: payload || {},
+      }),
+    });
+  } catch (_) {}
+}
+
 (async () => {
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox']
-  });
-  const context = await browser.newContext({ permissions: ['microphone', 'camera'] });
-  const page = await context.newPage();
+  let browser;
+  let context;
+  let page;
 
-  await page.goto(ROOM_URL);
-  await page.fill('#roomInput', ROOM_NAME);
-  await page.click('#connectBtn');
-  await page.waitForTimeout(4000);
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox']
+    });
+    context = await browser.newContext({ permissions: ['microphone', 'camera'] });
+    page = await context.newPage();
 
-  await page.evaluate(async ({ apiBase, uploadId, fileName, participants }) => {
+    await page.goto(ROOM_URL);
+    await page.fill('#roomInput', ROOM_NAME);
+    await page.click('#connectBtn');
+    await page.waitForTimeout(5000);
+
+    await page.evaluate(async ({ apiBase, uploadId, fileName, participants }) => {
     window.__serverUploadPromises = [];
 
     window.__serverPostChunk = async (chunkBlob, isLast) => {
@@ -43,8 +61,20 @@ let stopping = false;
       return json;
     };
 
-    const videoEl = document.querySelector('#remoteContainer video');
-    if (!videoEl) throw new Error('Nenhum elemento de video para gravar.');
+    const waitForVideo = async () => {
+      const timeoutAt = Date.now() + 15000;
+      while (Date.now() < timeoutAt) {
+        const remote = document.querySelector('#remoteContainer video');
+        if (remote && remote.srcObject) return remote;
+        const local = document.querySelector('#localVideo');
+        if (local && local.srcObject) return local;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      return null;
+    };
+
+    const videoEl = await waitForVideo();
+    if (!videoEl) throw new Error('Nenhum stream de vídeo disponível para gravar na sala.');
 
     const stream = videoEl.captureStream ? videoEl.captureStream() : (videoEl.mozCaptureStream ? videoEl.mozCaptureStream() : null);
     if (!stream) throw new Error('Falha ao capturar stream.');
@@ -57,44 +87,42 @@ let stopping = false;
       }
     };
     window.__serverRecorder.start(1000);
-  }, {
+    }, {
     apiBase: API_BASE,
     uploadId: UPLOAD_ID,
     fileName: FILE_NAME,
     participants: PARTICIPANTS,
-  });
+    });
 
-  const finalizeAndExit = async () => {
-    if (stopping) return;
-    stopping = true;
+    const finalizeAndExit = async () => {
+      if (stopping) return;
+      stopping = true;
 
-    try {
-      const result = await page.evaluate(async () => {
-        if (window.__serverRecorder && window.__serverRecorder.state !== 'inactive') {
-          window.__serverRecorder.stop();
-        }
-        await new Promise(resolve => setTimeout(resolve, 1200));
-        await Promise.all(window.__serverUploadPromises || []);
-        return await window.__serverPostChunk(null, true);
-      });
+      try {
+        const result = await page.evaluate(async () => {
+          if (window.__serverRecorder && window.__serverRecorder.state !== 'inactive') {
+            window.__serverRecorder.stop();
+          }
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          await Promise.all(window.__serverUploadPromises || []);
+          return await window.__serverPostChunk(null, true);
+        });
+        await postComplete(result || {});
+      } catch (err) {
+        await postComplete({ error: err && err.message ? err.message : 'Falha ao finalizar gravação no servidor.' });
+      }
 
-      await fetch(`${API_BASE}/recordings/server/complete/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          room_name: ROOM_NAME,
-          recording: result || {},
-        }),
-      });
-    } catch (err) {
-      console.error('Finalize error:', err.message || err);
-    }
+      if (context) await context.close();
+      if (browser) await browser.close();
+      process.exit(0);
+    };
 
-    await context.close();
-    await browser.close();
-    process.exit(0);
-  };
-
-  process.on('SIGTERM', finalizeAndExit);
-  process.on('SIGINT', finalizeAndExit);
+    process.on('SIGTERM', finalizeAndExit);
+    process.on('SIGINT', finalizeAndExit);
+  } catch (err) {
+    await postComplete({ error: err && err.message ? err.message : 'Falha ao iniciar gravador no servidor.' });
+    if (context) await context.close();
+    if (browser) await browser.close();
+    process.exit(1);
+  }
 })();

@@ -58,6 +58,7 @@
     const peers = {}; // peerId -> {pc, videoEl}
     let roomRecordingActive = false;
     let roomRecordingOwner = '';
+    let _recordingPollTimer = null;
 
     let __fakeMedia = null; // resources for fake media
 
@@ -181,6 +182,38 @@
       }
     }
 
+    function startRecordingResultPolling(roomName){
+      if(_recordingPollTimer) clearTimeout(_recordingPollTimer);
+      let attempts = 0;
+
+      const poll = async () => {
+        attempts += 1;
+        try{
+          const res = await fetch(`${BACKEND_API_BASE}/recordings/`);
+          const list = await res.json().catch(() => ([]));
+          if(res.ok && Array.isArray(list) && list.length){
+            const expectedPrefix = `recordings/${roomName}-`;
+            const found = list.find(item => item && item.file && item.file.startsWith(expectedPrefix));
+            if(found){
+              const videoLink = found.url ? `<a href="${found.url}" target="_blank" rel="noopener">ver gravação</a>` : 'link de gravação indisponível';
+              const minutesLink = found.minutes_url ? `<a href="${found.minutes_url}" target="_blank" rel="noopener">ver ata</a>` : 'ata ainda em processamento';
+              document.getElementById('recordStatus').innerHTML = `Arquivo pronto: ${videoLink} | ${minutesLink}`;
+              return;
+            }
+          }
+        }catch(_){ }
+
+        if(attempts < 20){
+          document.getElementById('recordStatus').textContent = 'Processando arquivo...';
+          _recordingPollTimer = setTimeout(poll, 3000);
+        }else{
+          document.getElementById('recordStatus').textContent = 'Arquivo ainda não disponível. Verifique /video/api/recordings/ em alguns segundos.';
+        }
+      };
+
+      poll();
+    }
+
     connectBtn.onclick = async () => {
       const room = (roomInput.value || new URLSearchParams(location.search).get('room') || 'testroom');
       currentRoom = room;
@@ -266,8 +299,13 @@
           document.getElementById('recordStatus').textContent = 'Gravação encerrada. Processando arquivo...';
           document.getElementById('recordStartBtn').disabled = false;
           document.getElementById('recordStopBtn').disabled = true;
+          if(currentRoom) startRecordingResultPolling(currentRoom);
         }else if(data.type === 'recording_ready'){
           const rec = (data && data.recording) ? data.recording : {};
+          if(rec.error){
+            document.getElementById('recordStatus').textContent = 'Falha na gravação do servidor: ' + rec.error;
+            return;
+          }
           const videoLink = rec.url ? `<a href="${rec.url}" target="_blank" rel="noopener">ver gravação</a>` : 'link de gravação indisponível';
           const minutesLink = rec.minutes_url ? `<a href="${rec.minutes_url}" target="_blank" rel="noopener">ver ata</a>` : 'ata ainda em processamento';
           document.getElementById('recordStatus').innerHTML = `Arquivo pronto: ${videoLink} | ${minutesLink}`;
@@ -338,6 +376,7 @@
         throw new Error(data.message || data.error || `HTTP ${res.status}`);
       }
       document.getElementById('recordStatus').textContent = 'Solicitação enviada: parada da gravação no servidor';
+      if(currentRoom) startRecordingResultPolling(currentRoom);
     }
 
     document.getElementById('recordStartBtn').onclick = async () => {

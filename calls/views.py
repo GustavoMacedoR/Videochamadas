@@ -304,5 +304,11 @@ class RoomRecordingCompleteView(APIView):
         if not isinstance(recording_payload, dict):
             return Response({'error': 'recording inválido'}, status=status.HTTP_400_BAD_REQUEST)
 
+        if recording_payload.get('error'):
+            notify_recording_ready(room_name, {
+                'error': recording_payload.get('error'),
+            })
+            return Response({'ok': True})
+
         notify_recording_ready(room_name, recording_payload)
         return Response({'ok': True})
