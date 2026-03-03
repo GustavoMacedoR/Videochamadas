@@ -263,11 +263,32 @@
 
     // Recording helpers
     let _recorder = null;
-    let _recordChunks = [];
     let _canvas = null;
     let _rafId = null;
     let _audioCtx = null;
     let _dest = null;
+    let _uploadId = null;
+    let _uploadFilename = null;
+    let _chunkQueue = [];
+    let _uploadInFlight = false;
+    let _recorderStopped = false;
+    let _finalized = false;
+    let _uploadFailed = false;
+
+    function resetRecordingState(){
+      if(_canvas && _canvas.parentNode) _canvas.parentNode.removeChild(_canvas); _canvas = null;
+      if(_audioCtx && _audioCtx.close) _audioCtx.close(); _audioCtx = null; _dest = null;
+      _recorder = null;
+      _uploadId = null;
+      _uploadFilename = null;
+      _chunkQueue = [];
+      _uploadInFlight = false;
+      _recorderStopped = false;
+      _finalized = false;
+      _uploadFailed = false;
+      document.getElementById('recordStartBtn').disabled = false;
+      document.getElementById('recordStopBtn').disabled = true;
+    }
 
     function buildMixedCanvas(){
       // create canvas to composite videos
@@ -291,6 +312,56 @@
         _rafId = requestAnimationFrame(draw);
       }
       draw();
+    }
+
+    async function postChunk(chunkBlob, isLast){
+      const fd = new FormData();
+      fd.append('upload_id', _uploadId);
+      fd.append('filename', _uploadFilename);
+      fd.append('is_last', isLast ? '1' : '0');
+      if(chunkBlob) fd.append('chunk', chunkBlob, _uploadFilename);
+
+      const uploadUrl = `${BACKEND_API_BASE}/recordings/chunk/`;
+      const res = await fetch(uploadUrl, {method:'POST', body: fd});
+      const json = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      return json;
+    }
+
+    async function tryFinalizeUpload(){
+      if(_uploadFailed) return;
+      if(!_recorderStopped || _uploadInFlight || _chunkQueue.length || _finalized) return;
+      _finalized = true;
+      try{
+        document.getElementById('recordStatus').textContent = 'Finalizando envio...';
+        const json = await postChunk(null, true);
+        document.getElementById('recordStatus').textContent = 'Enviado: ' + (json.file || json.id || 'OK');
+      }catch(e){
+        _uploadFailed = true;
+        document.getElementById('recordStatus').textContent = 'Upload falhou: ' + e.message;
+      }
+      resetRecordingState();
+    }
+
+    async function flushChunkQueue(){
+      if(_uploadInFlight) return;
+      _uploadInFlight = true;
+      try{
+        while(_chunkQueue.length){
+          const chunk = _chunkQueue.shift();
+          await postChunk(chunk, false);
+        }
+      }catch(e){
+        _uploadFailed = true;
+        document.getElementById('recordStatus').textContent = 'Upload falhou: ' + e.message;
+        if(_recorder && _recorder.state !== 'inactive'){
+          try{ _recorder.stop(); }catch(_){}
+        }
+        resetRecordingState();
+      }finally{
+        _uploadInFlight = false;
+      }
+      await tryFinalizeUpload();
     }
 
     function startRecording(){
@@ -320,29 +391,25 @@
         if(audioTracks && audioTracks.length) audioTracks.forEach(t=>vStream.addTrack(t));
       }catch(e){ console.warn('Audio mixing failed', e); }
 
-      _recordChunks = [];
+      _uploadId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('u-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+      _uploadFilename = `recording-${Date.now()}.webm`;
+      _chunkQueue = [];
+      _uploadInFlight = false;
+      _recorderStopped = false;
+      _finalized = false;
+      _uploadFailed = false;
       try{
         _recorder = new MediaRecorder(vStream, {mimeType: 'video/webm;codecs=vp8,opus'});
       }catch(e){ _recorder = new MediaRecorder(vStream); }
-      _recorder.ondataavailable = ev => { if(ev.data && ev.data.size) _recordChunks.push(ev.data); };
+      _recorder.ondataavailable = (ev) => {
+        if(ev.data && ev.data.size){
+          _chunkQueue.push(ev.data);
+          flushChunkQueue();
+        }
+      };
       _recorder.onstop = async () => {
-        const blob = new Blob(_recordChunks, {type:'video/webm'});
-        // upload
-        const fd = new FormData();
-        fd.append('file', blob, `recording-${Date.now()}.webm`);
-        const uploadUrl = `${BACKEND_API_BASE}/recordings/`;
-        try{
-          document.getElementById('recordStatus').textContent = 'Enviando...';
-          const res = await fetch(uploadUrl, {method:'POST', body: fd});
-          const json = await res.json();
-          document.getElementById('recordStatus').textContent = res.ok ? ('Enviado: '+(json.file||json.id||'OK')) : ('Erro: '+(json.error||res.status));
-        }catch(e){ document.getElementById('recordStatus').textContent = 'Upload falhou: '+e.message; }
-        // cleanup
-        if(_canvas && _canvas.parentNode) _canvas.parentNode.removeChild(_canvas); _canvas = null;
-        if(_audioCtx && _audioCtx.close) _audioCtx.close(); _audioCtx = null; _dest = null;
-        _recorder = null; _recordChunks = [];
-        document.getElementById('recordStartBtn').disabled = false;
-        document.getElementById('recordStopBtn').disabled = true;
+        _recorderStopped = true;
+        await flushChunkQueue();
       };
       _recorder.start(1000);
       document.getElementById('recordStatus').textContent = 'Gravando...';
@@ -354,7 +421,7 @@
       if(!_recorder) return;
       try{ _recorder.stop(); }catch(e){}
       if(_rafId) cancelAnimationFrame(_rafId); _rafId = null;
-      document.getElementById('recordStatus').textContent = 'Finalizando...';
+      document.getElementById('recordStatus').textContent = 'Parando gravação...';
     }
 
     document.getElementById('recordStartBtn').onclick = async () => {

@@ -8,6 +8,11 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import AllowAny
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
+from django.core.files.base import File
+from pathlib import Path
+from uuid import uuid4
+import os
 
 
 class RoomViewSet(viewsets.ModelViewSet):
@@ -102,3 +107,59 @@ class RecordingUploadView(APIView):
                 'created_at': r.created_at,
             })
         return Response(data)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class RecordingChunkUploadView(APIView):
+    parser_classes = (MultiPartParser, FormParser)
+    permission_classes = (AllowAny,)
+
+    def post(self, request, format=None):
+        from .models import Recording
+
+        upload_id = request.data.get('upload_id')
+        filename = request.data.get('filename') or f"recording-{uuid4().hex}.webm"
+        is_last = str(request.data.get('is_last', '')).lower() in {'1', 'true', 'yes'}
+        chunk = request.FILES.get('chunk')
+
+        if not upload_id:
+            return Response({'error': 'upload_id é obrigatório'}, status=status.HTTP_400_BAD_REQUEST)
+
+        temp_dir = Path(settings.MEDIA_ROOT) / 'tmp_recordings'
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = temp_dir / f"{upload_id}.part"
+
+        if chunk is not None:
+            with open(temp_path, 'ab') as temp_file:
+                for piece in chunk.chunks():
+                    temp_file.write(piece)
+
+        if not is_last:
+            current_size = temp_path.stat().st_size if temp_path.exists() else 0
+            return Response({'ok': True, 'upload_id': upload_id, 'size': current_size})
+
+        if not temp_path.exists() or temp_path.stat().st_size == 0:
+            return Response({'error': 'nenhum dado recebido para finalizar upload'}, status=status.HTTP_400_BAD_REQUEST)
+
+        safe_name = os.path.basename(str(filename)) or f"recording-{uuid4().hex}.webm"
+        with open(temp_path, 'rb') as temp_file:
+            recording = Recording.objects.create(file=File(temp_file, name=safe_name))
+
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        file_url = recording.file.url if recording.file else None
+        if file_url and request is not None:
+            try:
+                file_url = request.build_absolute_uri(file_url)
+            except Exception:
+                pass
+
+        return Response({
+            'id': str(recording.id),
+            'file': recording.file.name if recording.file else None,
+            'url': file_url,
+            'created_at': recording.created_at,
+        }, status=status.HTTP_201_CREATED)
