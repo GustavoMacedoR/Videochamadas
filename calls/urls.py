@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import RoomViewSet, CouchExampleView, CouchDocsList, CouchDocDetail, RecordingUploadView, RecordingChunkUploadView, RecordingMinutesView, RoomRecordingStartView, RoomRecordingStopView, RoomRecordingStatusView
+from .views import RoomViewSet, CouchExampleView, CouchDocsList, CouchDocDetail, RecordingUploadView, RecordingChunkUploadView, RecordingMinutesView, RoomRecordingStartView, RoomRecordingStopView, RoomRecordingStatusView, RoomRecordingCompleteView
 from .turn_view import TurnConfigView
 
 router = DefaultRouter()
@@ -23,5 +23,6 @@ urlpatterns += [
     path('recordings/server/start/', RoomRecordingStartView.as_view(), name='recording-server-start'),
     path('recordings/server/stop/', RoomRecordingStopView.as_view(), name='recording-server-stop'),
     path('recordings/server/status/', RoomRecordingStatusView.as_view(), name='recording-server-status'),
+    path('recordings/server/complete/', RoomRecordingCompleteView.as_view(), name='recording-server-complete'),
     path('turn/', TurnConfigView.as_view(), name='turn-config'),
 ]

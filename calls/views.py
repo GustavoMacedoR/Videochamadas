@@ -16,7 +16,7 @@ import os
 import json
 
 from .transcription import enqueue_minutes_generation
-from .server_recording import start_server_recording, stop_server_recording, get_room_recording_status
+from .server_recording import start_server_recording, stop_server_recording, get_room_recording_status, notify_recording_ready
 
 
 class RoomViewSet(viewsets.ModelViewSet):
@@ -291,3 +291,18 @@ class RoomRecordingStatusView(APIView):
             'started_by': state.started_by,
             'started_at': state.started_at,
         })
+
+
+class RoomRecordingCompleteView(APIView):
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        room_name = (request.data.get('room_name') or '').strip()
+        recording_payload = request.data.get('recording') or {}
+        if not room_name:
+            return Response({'error': 'room_name é obrigatório'}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(recording_payload, dict):
+            return Response({'error': 'recording inválido'}, status=status.HTTP_400_BAD_REQUEST)
+
+        notify_recording_ready(room_name, recording_payload)
+        return Response({'ok': True})

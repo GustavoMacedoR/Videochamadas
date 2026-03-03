@@ -263,9 +263,14 @@
         }else if(data.type === 'recording_stopped'){
           roomRecordingActive = false;
           roomRecordingOwner = '';
-          document.getElementById('recordStatus').textContent = 'Gravação encerrada';
+          document.getElementById('recordStatus').textContent = 'Gravação encerrada. Processando arquivo...';
           document.getElementById('recordStartBtn').disabled = false;
           document.getElementById('recordStopBtn').disabled = true;
+        }else if(data.type === 'recording_ready'){
+          const rec = (data && data.recording) ? data.recording : {};
+          const videoLink = rec.url ? `<a href="${rec.url}" target="_blank" rel="noopener">ver gravação</a>` : 'link de gravação indisponível';
+          const minutesLink = rec.minutes_url ? `<a href="${rec.minutes_url}" target="_blank" rel="noopener">ver ata</a>` : 'ata ainda em processamento';
+          document.getElementById('recordStatus').innerHTML = `Arquivo pronto: ${videoLink} | ${minutesLink}`;
         }
       };
     };

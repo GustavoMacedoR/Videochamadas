@@ -17,7 +17,7 @@ let stopping = false;
 (async () => {
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']
+    args: ['--no-sandbox']
   });
   const context = await browser.newContext({ permissions: ['microphone', 'camera'] });
   const page = await context.newPage();
@@ -43,7 +43,7 @@ let stopping = false;
       return json;
     };
 
-    const videoEl = document.querySelector('#remoteContainer video') || document.querySelector('video');
+    const videoEl = document.querySelector('#remoteContainer video');
     if (!videoEl) throw new Error('Nenhum elemento de video para gravar.');
 
     const stream = videoEl.captureStream ? videoEl.captureStream() : (videoEl.mozCaptureStream ? videoEl.mozCaptureStream() : null);
@@ -69,13 +69,22 @@ let stopping = false;
     stopping = true;
 
     try {
-      await page.evaluate(async () => {
+      const result = await page.evaluate(async () => {
         if (window.__serverRecorder && window.__serverRecorder.state !== 'inactive') {
           window.__serverRecorder.stop();
         }
         await new Promise(resolve => setTimeout(resolve, 1200));
         await Promise.all(window.__serverUploadPromises || []);
-        await window.__serverPostChunk(null, true);
+        return await window.__serverPostChunk(null, true);
+      });
+
+      await fetch(`${API_BASE}/recordings/server/complete/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_name: ROOM_NAME,
+          recording: result || {},
+        }),
       });
     } catch (err) {
       console.error('Finalize error:', err.message || err);

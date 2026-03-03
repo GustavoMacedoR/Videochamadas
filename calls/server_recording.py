@@ -28,6 +28,14 @@ def _notify_room(room_name, payload):
     )
 
 
+def notify_recording_ready(room_name, recording_payload):
+    _notify_room(room_name, {
+        'type': 'recording_ready',
+        'room_name': room_name,
+        'recording': recording_payload,
+    })
+
+
 def _build_room_url(room_name):
     base = os.environ.get('SERVER_CLIENT_BASE_URL')
     if base:
