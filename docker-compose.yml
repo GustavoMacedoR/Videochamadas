@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    image: videochamadas:latest
+    restart: always
+    env_file: .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=video_backend.settings
+      - ALLOWED_HOSTS=*
+      - CHANNEL_REDIS_URL=redis://redis:6379/0
+    # Bind the web service to localhost on a non-conflicting port (use 8087)
+    ports:
+      - "127.0.0.1:8087:8000"
+    volumes:
+      - static_volume:/app/static
+      - media_volume:/app/media
+    command: ["sh", "/app/entrypoint.sh", "uvicorn", "video_backend.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    # Do not expose Redis on the host to avoid conflicts and for security;
+    # keep it reachable from other containers via the compose network.
+    # If you need host access, uncomment and change the host port.
+    # ports:
+    #   - "127.0.0.1:6380:6379"
+
+  turn:
+    image: instrumentisto/coturn
+    restart: always
+    env_file: .env
+    environment:
+      - TURN_USER
+      - TURN_PASS
+      - PUBLIC_IP
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/tcp"
+    command: ["turnserver", "-n", "--no-dtls", "--no-tls", "--user=${TURN_USER}:${TURN_PASS}", "--realm=gerenciadorescolas.com.br", "--external-ip=${PUBLIC_IP}", "--min-port=49152", "--max-port=65535", "--verbose"]
+
+volumes:
+  static_volume:
+  media_volume:
+  redis_data:

@@ -1,0 +1,24 @@
+{
+  "name": "videochamadas",
+  "version": "1.0.0",
+  "description": "Estrutura mínima de backend para sinalização de WebRTC usando Django + Channels.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GustavoMacedoR/Videochamadas.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/GustavoMacedoR/Videochamadas/issues"
+  },
+  "homepage": "https://github.com/GustavoMacedoR/Videochamadas#readme",
+  "dependencies": {
+    "playwright": "^1.57.0"
+  }
+}

@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Teste Videochamada</title>
+  <style>video{width:45%;margin:1%;background:#000}</style>
+</head>
+<body>
+  <h3>Teste Videochamada (Django Channels signaling)</h3>
+  <div>
+    <video id="localVideo" autoplay muted playsinline></video>
+    <div id="remoteContainer" style="display:flex;flex-wrap:wrap"></div>
+  </div>
+  <div>
+    <input id="roomInput" placeholder="room" />
+    <button id="connectBtn">Conectar</button>
+    <button id="startBtn">Start Call (criar offer)</button>
+    <button id="hangupBtn">Hang Up</button>
+    <span id="status" style="margin-left:12px;color:#444"></span>
+    <div style="margin-top:8px">
+      <button id="recordStartBtn">Iniciar Gravação</button>
+      <button id="recordStopBtn" disabled>Parar e Enviar</button>
+      <span id="recordStatus" style="margin-left:12px;color:#444"></span>
+    </div>
+  </div>
+
+  <script>
+    const localVideo = document.getElementById('localVideo');
+    const remoteContainer = document.getElementById('remoteContainer');
+    const connectBtn = document.getElementById('connectBtn');
+    const startBtn = document.getElementById('startBtn');
+    const hangupBtn = document.getElementById('hangupBtn');
+    const roomInput = document.getElementById('roomInput');
+
+    // Defaults
+    const BACKEND_PORT = 8000; // ajuste se o runserver usar outra porta
+    const WS_BASE_PATH = '/ws/calls/'; // changed to avoid conflict with existing /ws/
+    // ICE servers: multiple public STUN servers for better NAT traversal (no TURN entries)
+    const ICE_SERVERS = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:stun.services.mozilla.com' },
+      { urls: 'stun:stun.stunprotocol.org:3478' }
+    ];
+    // Build API base: always call the API under the `/video` prefix.
+    const API_ORIGIN = location.origin;
+    const API_PREFIX = '/video';
+    const BACKEND_API_BASE = (location.protocol === 'file:' ? `http://127.0.0.1:${BACKEND_PORT}${API_PREFIX}` : (API_ORIGIN + API_PREFIX)) + '/api';
+
+    const clientId = Math.random().toString(36).slice(2, 9);
+    let localStream;
+    let ws;
+    const peers = {}; // peerId -> {pc, videoEl}
+
+    let __fakeMedia = null; // resources for fake media
+
+    async function initLocalMedia(){
+      try{
+        localStream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
+        localVideo.srcObject = localStream;
+        return;
+      }catch(e){
+        console.error('getUserMedia failed, using virtual fallback:', e);
+        // show a clearer message in the page for debugging
+        document.getElementById('status').textContent = 'Local media: unavailable (' + (e.name || '') + ': ' + (e.message || '') + ')';
+        // expose permissions state if available
+        try{
+          if(navigator.permissions){
+            navigator.permissions.query({name:'camera'}).then(p => console.info('camera permission state:', p.state)).catch(()=>{});
+            navigator.permissions.query({name:'microphone'}).then(p => console.info('microphone permission state:', p.state)).catch(()=>{});
+          }
+        }catch(_){ }
+        localStream = createFakeMediaStream();
+        localVideo.srcObject = localStream;
+      }
+    }
+
+    function createFakeMediaStream(){
+      const canvas = document.createElement('canvas');
+      canvas.width = 640; canvas.height = 480; canvas.style.display = 'none';
+      document.body.appendChild(canvas);
+      const ctx = canvas.getContext('2d');
+
+      let t = 0;
+      let rafId = null;
+      function draw(){
+        t += 0.03;
+        ctx.fillStyle = '#111'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        for(let i=0;i<6;i++){
+          const x = (canvas.width/2) + Math.sin(t*(0.5+i*0.2)+i)*140;
+          const y = (canvas.height/2) + Math.cos(t*(0.4+i*0.15)+i)*90;
+          ctx.beginPath(); ctx.fillStyle = `hsl(${(t*40+i*60)%360},60%,50%)`;
+          ctx.arc(x,y,40,0,Math.PI*2); ctx.fill();
+        }
+        rafId = requestAnimationFrame(draw);
+      }
+      draw();
+
+      const stream = canvas.captureStream(30);
+
+      // generate a very quiet tone as fake audio
+      let audioCtx = null; let osc = null;
+      try{
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const dest = audioCtx.createMediaStreamDestination();
+        osc = audioCtx.createOscillator(); osc.type = 'sine'; osc.frequency.value = 220;
+        const gain = audioCtx.createGain(); gain.gain.value = 0.02;
+        osc.connect(gain); gain.connect(dest); osc.start();
+        const aTrack = dest.stream.getAudioTracks()[0]; if(aTrack) stream.addTrack(aTrack);
+      }catch(e){ console.warn('fake audio not created', e); }
+
+      __fakeMedia = {canvas, rafId, audioCtx, osc};
+      return stream;
+    }
+
+    function makePeerConnection(peerId){
+        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+        // Log ICE candidates and connection state for debugging P2P vs TURN relay
+        pc.onicecandidate = (ev) => {
+          if(ev.candidate){
+            console.log('ICE candidate generated for', peerId, ev.candidate.candidate);
+            if(document.getElementById('status')){
+              const s = document.getElementById('status');
+              s.textContent = 'ICE: generated candidate for ' + peerId + ' (' + ev.candidate.candidate.slice(0,80) + '...)';
+            }
+            sendMessage({type:'candidate', candidate: ev.candidate, to: peerId, from: clientId});
+          }
+        };
+        pc.oniceconnectionstatechange = () => {
+          console.log('ICE connection state for', peerId, pc.iceConnectionState);
+          if(document.getElementById('status')) document.getElementById('status').textContent = 'ICE state: ' + pc.iceConnectionState;
+        };
+        pc.onconnectionstatechange = () => {
+          console.log('Connection state for', peerId, pc.connectionState);
+          if(document.getElementById('status')) document.getElementById('status').textContent = 'Connection: ' + pc.connectionState;
+        };
+        pc.ontrack = (ev) => {
+          let info = peers[peerId];
+          if(!info) return;
+          info.videoEl.srcObject = ev.streams[0];
+        };
+      if(localStream){
+        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+      }
+      // expose a small helper to inspect gathered candidates later
+      pc._peerId = peerId;
+      return pc;
+    }
+
+    function sendMessage(msg){
+      if(!ws){ console.warn('sendMessage: no ws'); return; }
+      if(!msg.from) msg.from = clientId;
+      console.log('sendMessage ->', msg);
+      if(ws.readyState !== WebSocket.OPEN){ console.warn('WS not open yet', ws.readyState); return; }
+      ws.send(JSON.stringify(msg));
+    }
+
+    connectBtn.onclick = async () => {
+      const room = (roomInput.value || new URLSearchParams(location.search).get('room') || 'testroom');
+      await initLocalMedia();
+
+      const protocol = (location.protocol === 'https:') ? 'wss' : 'ws';
+      const hostPort = (location.protocol === 'https:') ? location.host : `${location.hostname}:${BACKEND_PORT}`;
+      const url = `${protocol}://${hostPort}${WS_BASE_PATH}${encodeURIComponent(room)}/`;
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        console.log('WS open', url);
+        document.getElementById('status').textContent = 'WS: open';
+        startBtn.disabled = false;
+        // announce ourselves to the room so existing peers will create offers
+        sendMessage({type: 'join', client_id: clientId});
+      };
+      ws.onclose = () => { console.log('WS closed'); document.getElementById('status').textContent = 'WS: closed'; };
+      ws.onerror = (e) => { console.error('WS error', e); document.getElementById('status').textContent = 'WS: error'; };
+
+      // disable start until ws open
+      startBtn.disabled = true;
+      document.getElementById('status').textContent = 'WS: connecting...';
+
+      ws.onmessage = async (evt) => {
+        let data;
+        try{ data = JSON.parse(evt.data); }catch(e){ return; }
+        console.log('WS msg', data);
+        // Ignore messages from ourselves
+        if(data.from === clientId) return;
+
+        if(data.type === 'join'){
+          // a new peer joined (data.client_id)
+          const newId = data.client_id;
+          if(newId === clientId) return;
+          if(peers[newId]) return; // already have
+          // create pc and make offer to new peer
+          const videoEl = createRemoteVideoEl(newId);
+          const pc = makePeerConnection(newId);
+          peers[newId] = {pc, videoEl};
+          try{
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            sendMessage({type:'offer', sdp: offer.sdp, to: newId, from: clientId});
+          }catch(e){ console.error('Failed to create/send offer to', newId, e); }
+        }else if(data.type === 'offer'){
+          if(data.to !== clientId) return;
+          const fromId = data.from;
+          if(!peers[fromId]){
+            const videoEl = createRemoteVideoEl(fromId);
+            const pc = makePeerConnection(fromId);
+            peers[fromId] = {pc, videoEl};
+          }
+          const pc = peers[fromId].pc;
+          await pc.setRemoteDescription({type:'offer', sdp: data.sdp});
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          sendMessage({type:'answer', sdp: answer.sdp, to: fromId, from: clientId});
+        }else if(data.type === 'answer'){
+          if(data.to !== clientId) return;
+          const fromId = data.from;
+          const info = peers[fromId];
+          if(!info){ console.warn('answer from unknown peer', fromId); return; }
+          await info.pc.setRemoteDescription({type:'answer', sdp: data.sdp});
+        }else if(data.type === 'candidate'){
+          if(data.to !== clientId) return;
+          const fromId = data.from;
+          const info = peers[fromId];
+          if(!info){ console.warn('candidate from unknown peer', fromId); return; }
+          try{ await info.pc.addIceCandidate(data.candidate); }catch(e){ console.warn('addIceCandidate failed', e); }
+        }
+      };
+    };
+
+    // Start button is not required for multi-party (offers created automatically on join)
+    startBtn.onclick = () => alert('Auto-offer is used for multi-party; simply click Conectar in multiple clients.');
+
+    hangupBtn.onclick = () => {
+      if(ws) ws.close();
+      // close all peer connections and remove videos
+      Object.keys(peers).forEach(id => {
+        try{ peers[id].pc.close(); }catch(e){}
+        if(peers[id].videoEl && peers[id].videoEl.parentNode) peers[id].videoEl.parentNode.removeChild(peers[id].videoEl);
+      });
+      Object.keys(peers).forEach(k => delete peers[k]);
+      if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream = null; }
+      if(__fakeMedia){
+        if(__fakeMedia.rafId) cancelAnimationFrame(__fakeMedia.rafId);
+        if(__fakeMedia.osc && __fakeMedia.osc.stop) try{ __fakeMedia.osc.stop(); }catch(e){}
+        if(__fakeMedia.audioCtx && __fakeMedia.audioCtx.close) __fakeMedia.audioCtx.close();
+        if(__fakeMedia.canvas && __fakeMedia.canvas.parentNode) __fakeMedia.canvas.parentNode.removeChild(__fakeMedia.canvas);
+        __fakeMedia = null;
+      }
+      localVideo.srcObject = null;
+    };
+
+    function createRemoteVideoEl(peerId){
+      const v = document.createElement('video');
+      v.autoplay = true; v.playsInline = true; v.style.width = '45%'; v.style.margin = '1%'; v.id = 'remote_' + peerId;
+      remoteContainer.appendChild(v);
+      return v;
+    }
+
+    // Recording helpers
+    let _recorder = null;
+    let _recordChunks = [];
+    let _canvas = null;
+    let _rafId = null;
+    let _audioCtx = null;
+    let _dest = null;
+
+    function buildMixedCanvas(){
+      // create canvas to composite videos
+      const width = 1280, height = 720;
+      _canvas = document.createElement('canvas'); _canvas.width = width; _canvas.height = height; _canvas.style.display='none';
+      document.body.appendChild(_canvas);
+      const ctx = _canvas.getContext('2d');
+
+      function draw(){
+        ctx.fillStyle = '#111'; ctx.fillRect(0,0,width,height);
+        // place local on left and remote videos tiled
+        const vids = [localVideo].concat(Array.from(remoteContainer.querySelectorAll('video')));
+        const cols = 2; const rows = Math.ceil(vids.length/cols);
+        const cellW = Math.floor(width/cols); const cellH = Math.floor(height/rows);
+        vids.forEach((v,i)=>{
+          try{
+            const cx = (i%cols)*cellW; const cy = Math.floor(i/cols)*cellH;
+            ctx.drawImage(v, cx, cy, cellW, cellH);
+          }catch(e){}
+        });
+        _rafId = requestAnimationFrame(draw);
+      }
+      draw();
+    }
+
+    function startRecording(){
+      if(_recorder) return;
+      buildMixedCanvas();
+      // capture video from canvas
+      const vStream = _canvas.captureStream(30);
+      // mix audio from local and remote streams
+      try{
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        _dest = _audioCtx.createMediaStreamDestination();
+        // add local
+        if(localStream){
+          const src = _audioCtx.createMediaStreamSource(localStream);
+          src.connect(_dest);
+        }
+        // add remote audio tracks
+        Array.from(remoteContainer.querySelectorAll('video')).forEach(v=>{
+          if(v && v.srcObject){
+            try{
+              const src = _audioCtx.createMediaStreamSource(v.srcObject);
+              src.connect(_dest);
+            }catch(e){ console.warn('could not add remote audio source', e); }
+          }
+        });
+        const audioTracks = _dest.stream.getAudioTracks();
+        if(audioTracks && audioTracks.length) audioTracks.forEach(t=>vStream.addTrack(t));
+      }catch(e){ console.warn('Audio mixing failed', e); }
+
+      _recordChunks = [];
+      try{
+        _recorder = new MediaRecorder(vStream, {mimeType: 'video/webm;codecs=vp8,opus'});
+      }catch(e){ _recorder = new MediaRecorder(vStream); }
+      _recorder.ondataavailable = ev => { if(ev.data && ev.data.size) _recordChunks.push(ev.data); };
+      _recorder.onstop = async () => {
+        const blob = new Blob(_recordChunks, {type:'video/webm'});
+        // upload
+        const fd = new FormData();
+        fd.append('file', blob, `recording-${Date.now()}.webm`);
+        const uploadUrl = `${BACKEND_API_BASE}/recordings/`;
+        try{
+          document.getElementById('recordStatus').textContent = 'Enviando...';
+          const res = await fetch(uploadUrl, {method:'POST', body: fd});
+          const json = await res.json();
+          document.getElementById('recordStatus').textContent = res.ok ? ('Enviado: '+(json.file||json.id||'OK')) : ('Erro: '+(json.error||res.status));
+        }catch(e){ document.getElementById('recordStatus').textContent = 'Upload falhou: '+e.message; }
+        // cleanup
+        if(_canvas && _canvas.parentNode) _canvas.parentNode.removeChild(_canvas); _canvas = null;
+        if(_audioCtx && _audioCtx.close) _audioCtx.close(); _audioCtx = null; _dest = null;
+        _recorder = null; _recordChunks = [];
+        document.getElementById('recordStartBtn').disabled = false;
+        document.getElementById('recordStopBtn').disabled = true;
+      };
+      _recorder.start(1000);
+      document.getElementById('recordStatus').textContent = 'Gravando...';
+      document.getElementById('recordStartBtn').disabled = true;
+      document.getElementById('recordStopBtn').disabled = false;
+    }
+
+    function stopRecording(){
+      if(!_recorder) return;
+      try{ _recorder.stop(); }catch(e){}
+      if(_rafId) cancelAnimationFrame(_rafId); _rafId = null;
+      document.getElementById('recordStatus').textContent = 'Finalizando...';
+    }
+
+    document.getElementById('recordStartBtn').onclick = async () => {
+      await initLocalMedia();
+      startRecording();
+    };
+    document.getElementById('recordStopBtn').onclick = stopRecording;
+  </script>
+</body>
+</html>

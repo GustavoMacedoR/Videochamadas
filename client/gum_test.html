@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Webcam test</title></head>
+<body>
+<h3>Webcam / Microphone test</h3>
+<video id="v" autoplay playsinline muted style="width:480px;border:1px solid #ccc"></video>
+<div id="info"></div>
+<button id="start">Start getUserMedia</button>
+<script>
+const v = document.getElementById('v');
+const info = document.getElementById('info');
+const start = document.getElementById('start');
+start.onclick = async () => {
+  info.textContent = 'Requesting...';
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
+    v.srcObject = s;
+    info.textContent = 'OK - tracks: ' + s.getTracks().map(t=>t.kind+':'+t.readyState).join(', ');
+  }catch(e){
+    console.error('getUserMedia error', e);
+    info.textContent = 'ERROR: ' + (e.name||'') + ' - ' + (e.message||'');
+    try{
+      if(navigator.permissions){
+        const cam = await navigator.permissions.query({name:'camera'}).catch(()=>null);
+        const mic = await navigator.permissions.query({name:'microphone'}).catch(()=>null);
+        info.textContent += '\npermission camera: ' + (cam?cam.state:'unknown') + ', microphone: ' + (mic?mic.state:'unknown');
+      }
+    }catch(_){ }
+  }
+};
+</script>
+</body>
+</html>
