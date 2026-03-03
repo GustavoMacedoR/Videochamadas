@@ -16,6 +16,7 @@ import os
 import json
 
 from .transcription import enqueue_minutes_generation
+from .server_recording import start_server_recording, stop_server_recording, get_room_recording_status
 
 
 class RoomViewSet(viewsets.ModelViewSet):
@@ -223,4 +224,70 @@ class RecordingMinutesView(APIView):
             'minutes_generated_at': recording.minutes_generated_at,
             'minutes_error': recording.minutes_error,
             'minutes_text': recording.minutes_text,
+        })
+
+
+class RoomRecordingStartView(APIView):
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        room_name = request.data.get('room_name')
+        started_by = request.data.get('started_by') or request.data.get('client_id') or 'server'
+        ok, message, state = start_server_recording(room_name=room_name, started_by=started_by)
+        status_code = status.HTTP_200_OK if ok else status.HTTP_409_CONFLICT
+        payload = {
+            'ok': ok,
+            'message': message,
+            'room_name': room_name,
+        }
+        if state is not None:
+            payload.update({
+                'is_recording': state.is_recording,
+                'started_by': state.started_by,
+                'started_at': state.started_at,
+            })
+        return Response(payload, status=status_code)
+
+
+class RoomRecordingStopView(APIView):
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        room_name = request.data.get('room_name')
+        stopped_by = request.data.get('stopped_by') or request.data.get('client_id') or 'server'
+        ok, message, state = stop_server_recording(room_name=room_name, stopped_by=stopped_by)
+        status_code = status.HTTP_200_OK if ok else status.HTTP_409_CONFLICT
+        payload = {
+            'ok': ok,
+            'message': message,
+            'room_name': room_name,
+        }
+        if state is not None:
+            payload.update({
+                'is_recording': state.is_recording,
+                'started_by': state.started_by,
+                'started_at': state.started_at,
+            })
+        return Response(payload, status=status_code)
+
+
+class RoomRecordingStatusView(APIView):
+    permission_classes = (AllowAny,)
+
+    def get(self, request):
+        room_name = request.query_params.get('room_name')
+        state = get_room_recording_status(room_name)
+        if state is None:
+            return Response({
+                'room_name': room_name,
+                'is_recording': False,
+                'started_by': '',
+                'started_at': None,
+            })
+
+        return Response({
+            'room_name': state.room_name,
+            'is_recording': state.is_recording,
+            'started_by': state.started_by,
+            'started_at': state.started_at,
         })

@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
   ffmpeg \
+  nodejs \
+  npm \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps
@@ -23,6 +25,10 @@ RUN pip install -r /app/requirements.txt \
 
 # Copy project
 COPY . /app
+
+# Install Node dependencies for server-side recording
+RUN npm install --omit=dev
+RUN npx playwright install --with-deps chromium
 
 # Entrypoint for migrations / collectstatic
 COPY entrypoint.sh /app/entrypoint.sh

@@ -19,8 +19,8 @@
     <button id="hangupBtn">Hang Up</button>
     <span id="status" style="margin-left:12px;color:#444"></span>
     <div style="margin-top:8px">
-      <button id="recordStartBtn">Iniciar Gravação</button>
-      <button id="recordStopBtn" disabled>Parar e Enviar</button>
+      <button id="recordStartBtn" disabled>Iniciar Gravação (Servidor)</button>
+      <button id="recordStopBtn" disabled>Parar Gravação (Servidor)</button>
       <span id="recordStatus" style="margin-left:12px;color:#444"></span>
     </div>
   </div>
@@ -54,7 +54,10 @@
     const clientId = Math.random().toString(36).slice(2, 9);
     let localStream;
     let ws;
+    let currentRoom = null;
     const peers = {}; // peerId -> {pc, videoEl}
+    let roomRecordingActive = false;
+    let roomRecordingOwner = '';
 
     let __fakeMedia = null; // resources for fake media
 
@@ -159,8 +162,28 @@
       ws.send(JSON.stringify(msg));
     }
 
+    async function fetchRoomRecordingStatus(room){
+      if(!room) return;
+      const url = `${BACKEND_API_BASE}/recordings/server/status/?room_name=${encodeURIComponent(room)}`;
+      const res = await fetch(url);
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      roomRecordingActive = !!data.is_recording;
+      roomRecordingOwner = data.started_by || '';
+      if(roomRecordingActive){
+        document.getElementById('recordStatus').textContent = `Gravação ativa na sala por ${roomRecordingOwner || 'outro participante'}`;
+        document.getElementById('recordStartBtn').disabled = true;
+        document.getElementById('recordStopBtn').disabled = false;
+      }else{
+        document.getElementById('recordStatus').textContent = 'Nenhuma gravação ativa';
+        document.getElementById('recordStartBtn').disabled = false;
+        document.getElementById('recordStopBtn').disabled = true;
+      }
+    }
+
     connectBtn.onclick = async () => {
       const room = (roomInput.value || new URLSearchParams(location.search).get('room') || 'testroom');
+      currentRoom = room;
       await initLocalMedia();
 
       const protocol = (location.protocol === 'https:') ? 'wss' : 'ws';
@@ -172,6 +195,9 @@
         console.log('WS open', url);
         document.getElementById('status').textContent = 'WS: open';
         startBtn.disabled = false;
+        fetchRoomRecordingStatus(currentRoom).catch(e => {
+          document.getElementById('recordStatus').textContent = 'Falha ao consultar gravação: ' + e.message;
+        });
         // announce ourselves to the room so existing peers will create offers
         sendMessage({type: 'join', client_id: clientId});
       };
@@ -228,6 +254,18 @@
           const info = peers[fromId];
           if(!info){ console.warn('candidate from unknown peer', fromId); return; }
           try{ await info.pc.addIceCandidate(data.candidate); }catch(e){ console.warn('addIceCandidate failed', e); }
+        }else if(data.type === 'recording_started'){
+          roomRecordingActive = true;
+          roomRecordingOwner = data.started_by || 'outro participante';
+          document.getElementById('recordStatus').textContent = `Gravação iniciada por ${roomRecordingOwner}`;
+          document.getElementById('recordStartBtn').disabled = true;
+          document.getElementById('recordStopBtn').disabled = false;
+        }else if(data.type === 'recording_stopped'){
+          roomRecordingActive = false;
+          roomRecordingOwner = '';
+          document.getElementById('recordStatus').textContent = 'Gravação encerrada';
+          document.getElementById('recordStartBtn').disabled = false;
+          document.getElementById('recordStopBtn').disabled = true;
         }
       };
     };
@@ -261,208 +299,56 @@
       return v;
     }
 
-    // Recording helpers
-    let _recorder = null;
-    let _canvas = null;
-    let _rafId = null;
-    let _audioCtx = null;
-    let _dest = null;
-    let _uploadId = null;
-    let _uploadFilename = null;
-    let _chunkQueue = [];
-    let _uploadInFlight = false;
-    let _recorderStopped = false;
-    let _finalized = false;
-    let _uploadFailed = false;
-    let _minutesPollTimer = null;
+    // Recording control now happens on backend/server
 
-    function buildMixedCanvas(){
-      // create canvas to composite videos
-      const width = 1280, height = 720;
-      _canvas = document.createElement('canvas'); _canvas.width = width; _canvas.height = height; _canvas.style.display='none';
-      document.body.appendChild(_canvas);
-      const ctx = _canvas.getContext('2d');
-
-      function draw(){
-        ctx.fillStyle = '#111'; ctx.fillRect(0,0,width,height);
-        // place local on left and remote videos tiled
-        const vids = [localVideo].concat(Array.from(remoteContainer.querySelectorAll('video')));
-        const cols = 2; const rows = Math.ceil(vids.length/cols);
-        const cellW = Math.floor(width/cols); const cellH = Math.floor(height/rows);
-        vids.forEach((v,i)=>{
-          try{
-            const cx = (i%cols)*cellW; const cy = Math.floor(i/cols)*cellH;
-            ctx.drawImage(v, cx, cy, cellW, cellH);
-          }catch(e){}
-        });
-        _rafId = requestAnimationFrame(draw);
+    async function requestServerRecordingStart(){
+      if(!currentRoom){
+        document.getElementById('recordStatus').textContent = 'Conecte-se à sala antes de iniciar gravação';
+        return;
       }
-      draw();
-    }
-
-    async function postChunk(chunkBlob, isLast){
-      const fd = new FormData();
-      fd.append('upload_id', _uploadId);
-      fd.append('filename', _uploadFilename);
-      fd.append('is_last', isLast ? '1' : '0');
-      if(chunkBlob) fd.append('chunk', chunkBlob, _uploadFilename);
-      if(isLast){
-        const participants = [clientId].concat(Object.keys(peers));
-        fd.append('participants', JSON.stringify(participants));
+      const res = await fetch(`${BACKEND_API_BASE}/recordings/server/start/`, {
+        method:'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({room_name: currentRoom, started_by: clientId})
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || !data.ok){
+        throw new Error(data.message || data.error || `HTTP ${res.status}`);
       }
-
-      const uploadUrl = `${BACKEND_API_BASE}/recordings/chunk/`;
-      const res = await fetch(uploadUrl, {method:'POST', body: fd});
-      const json = await res.json().catch(() => ({}));
-      if(!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      return json;
+      document.getElementById('recordStatus').textContent = 'Solicitação enviada: gravação no servidor iniciada';
     }
 
-    async function tryFinalizeUpload(){
-      if(_uploadFailed) return;
-      if(!_recorderStopped || _uploadInFlight || _chunkQueue.length || _finalized) return;
-      _finalized = true;
-      try{
-        document.getElementById('recordStatus').textContent = 'Finalizando envio...';
-        const json = await postChunk(null, true);
-        document.getElementById('recordStatus').textContent = 'Enviado: ' + (json.file || json.id || 'OK') + '. Gerando ata...';
-        if(json.id) startMinutesPolling(json.id, json.minutes_url);
-      }catch(e){
-        _uploadFailed = true;
-        document.getElementById('recordStatus').textContent = 'Upload falhou: ' + e.message;
+    async function requestServerRecordingStop(){
+      if(!currentRoom){
+        document.getElementById('recordStatus').textContent = 'Conecte-se à sala antes de parar gravação';
+        return;
       }
-
-      if(_canvas && _canvas.parentNode) _canvas.parentNode.removeChild(_canvas); _canvas = null;
-      if(_audioCtx && _audioCtx.close) _audioCtx.close(); _audioCtx = null; _dest = null;
-      _recorder = null;
-      _uploadId = null;
-      _uploadFilename = null;
-      _chunkQueue = [];
-      _uploadInFlight = false;
-      _recorderStopped = false;
-      _finalized = false;
-      _uploadFailed = false;
-      document.getElementById('recordStartBtn').disabled = false;
-      document.getElementById('recordStopBtn').disabled = true;
-    }
-
-    async function flushChunkQueue(){
-      if(_uploadInFlight) return;
-      _uploadInFlight = true;
-      try{
-        while(_chunkQueue.length){
-          const chunk = _chunkQueue.shift();
-          await postChunk(chunk, false);
-        }
-      }catch(e){
-        _uploadFailed = true;
-        document.getElementById('recordStatus').textContent = 'Upload falhou: ' + e.message;
-        document.getElementById('recordStartBtn').disabled = false;
-        document.getElementById('recordStopBtn').disabled = true;
-      }finally{
-        _uploadInFlight = false;
+      const res = await fetch(`${BACKEND_API_BASE}/recordings/server/stop/`, {
+        method:'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({room_name: currentRoom, stopped_by: clientId})
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || !data.ok){
+        throw new Error(data.message || data.error || `HTTP ${res.status}`);
       }
-      await tryFinalizeUpload();
-    }
-
-    function startMinutesPolling(recordingId, minutesUrl){
-      if(_minutesPollTimer) clearTimeout(_minutesPollTimer);
-      const fallbackUrl = `${BACKEND_API_BASE}/recordings/${recordingId}/minutes/`;
-      const endpoint = minutesUrl || fallbackUrl;
-
-      const poll = async () => {
-        try{
-          const res = await fetch(endpoint);
-          const data = await res.json();
-          if(!res.ok){
-            document.getElementById('recordStatus').textContent = 'Falha ao consultar ata: ' + (data.error || res.status);
-            return;
-          }
-
-          if(data.minutes_status === 'done'){
-            document.getElementById('recordStatus').innerHTML = `Ata disponível: <a href="${endpoint}" target="_blank" rel="noopener">abrir ata</a>`;
-            return;
-          }
-          if(data.minutes_status === 'failed'){
-            document.getElementById('recordStatus').textContent = 'Falha ao gerar ata: ' + (data.minutes_error || 'erro desconhecido');
-            return;
-          }
-
-          document.getElementById('recordStatus').textContent = 'Ata em processamento...';
-          _minutesPollTimer = setTimeout(poll, 3000);
-        }catch(e){
-          document.getElementById('recordStatus').textContent = 'Erro ao consultar ata: ' + e.message;
-        }
-      };
-
-      poll();
-    }
-
-    function startRecording(){
-      if(_recorder) return;
-      buildMixedCanvas();
-      // capture video from canvas
-      const vStream = _canvas.captureStream(30);
-      // mix audio from local and remote streams
-      try{
-        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        _dest = _audioCtx.createMediaStreamDestination();
-        // add local
-        if(localStream){
-          const src = _audioCtx.createMediaStreamSource(localStream);
-          src.connect(_dest);
-        }
-        // add remote audio tracks
-        Array.from(remoteContainer.querySelectorAll('video')).forEach(v=>{
-          if(v && v.srcObject){
-            try{
-              const src = _audioCtx.createMediaStreamSource(v.srcObject);
-              src.connect(_dest);
-            }catch(e){ console.warn('could not add remote audio source', e); }
-          }
-        });
-        const audioTracks = _dest.stream.getAudioTracks();
-        if(audioTracks && audioTracks.length) audioTracks.forEach(t=>vStream.addTrack(t));
-      }catch(e){ console.warn('Audio mixing failed', e); }
-
-      _uploadId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('u-' + Date.now() + '-' + Math.random().toString(36).slice(2));
-      _uploadFilename = `recording-${Date.now()}.webm`;
-      _chunkQueue = [];
-      _uploadInFlight = false;
-      _recorderStopped = false;
-      _finalized = false;
-      _uploadFailed = false;
-      try{
-        _recorder = new MediaRecorder(vStream, {mimeType: 'video/webm;codecs=vp8,opus'});
-      }catch(e){ _recorder = new MediaRecorder(vStream); }
-      _recorder.ondataavailable = (ev) => {
-        if(ev.data && ev.data.size){
-          _chunkQueue.push(ev.data);
-          flushChunkQueue();
-        }
-      };
-      _recorder.onstop = async () => {
-        _recorderStopped = true;
-        await flushChunkQueue();
-      };
-      _recorder.start(1000);
-      document.getElementById('recordStatus').textContent = 'Gravando...';
-      document.getElementById('recordStartBtn').disabled = true;
-      document.getElementById('recordStopBtn').disabled = false;
-    }
-
-    function stopRecording(){
-      if(!_recorder) return;
-      try{ _recorder.stop(); }catch(e){}
-      if(_rafId) cancelAnimationFrame(_rafId); _rafId = null;
-      document.getElementById('recordStatus').textContent = 'Parando gravação...';
+      document.getElementById('recordStatus').textContent = 'Solicitação enviada: parada da gravação no servidor';
     }
 
     document.getElementById('recordStartBtn').onclick = async () => {
-      await initLocalMedia();
-      startRecording();
+      try{
+        await requestServerRecordingStart();
+      }catch(e){
+        document.getElementById('recordStatus').textContent = 'Não foi possível iniciar: ' + e.message;
+      }
     };
-    document.getElementById('recordStopBtn').onclick = stopRecording;
+    document.getElementById('recordStopBtn').onclick = async () => {
+      try{
+        await requestServerRecordingStop();
+      }catch(e){
+        document.getElementById('recordStatus').textContent = 'Não foi possível parar: ' + e.message;
+      }
+    };
   </script>
 </body>
 </html>

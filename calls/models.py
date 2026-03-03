@@ -34,3 +34,16 @@ class Recording(models.Model):
 
     def __str__(self):
         return str(self.file.name)
+
+
+class RoomRecordingState(models.Model):
+    room_name = models.CharField(max_length=200, unique=True)
+    is_recording = models.BooleanField(default=False)
+    started_by = models.CharField(max_length=200, blank=True, default='')
+    process_pid = models.IntegerField(null=True, blank=True)
+    process_token = models.CharField(max_length=64, blank=True, default='')
+    started_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.room_name} ({'recording' if self.is_recording else 'idle'})"
