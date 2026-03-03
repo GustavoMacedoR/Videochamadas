@@ -275,21 +275,6 @@
     let _finalized = false;
     let _uploadFailed = false;
 
-    function resetRecordingState(){
-      if(_canvas && _canvas.parentNode) _canvas.parentNode.removeChild(_canvas); _canvas = null;
-      if(_audioCtx && _audioCtx.close) _audioCtx.close(); _audioCtx = null; _dest = null;
-      _recorder = null;
-      _uploadId = null;
-      _uploadFilename = null;
-      _chunkQueue = [];
-      _uploadInFlight = false;
-      _recorderStopped = false;
-      _finalized = false;
-      _uploadFailed = false;
-      document.getElementById('recordStartBtn').disabled = false;
-      document.getElementById('recordStopBtn').disabled = true;
-    }
-
     function buildMixedCanvas(){
       // create canvas to composite videos
       const width = 1280, height = 720;
@@ -340,7 +325,19 @@
         _uploadFailed = true;
         document.getElementById('recordStatus').textContent = 'Upload falhou: ' + e.message;
       }
-      resetRecordingState();
+
+      if(_canvas && _canvas.parentNode) _canvas.parentNode.removeChild(_canvas); _canvas = null;
+      if(_audioCtx && _audioCtx.close) _audioCtx.close(); _audioCtx = null; _dest = null;
+      _recorder = null;
+      _uploadId = null;
+      _uploadFilename = null;
+      _chunkQueue = [];
+      _uploadInFlight = false;
+      _recorderStopped = false;
+      _finalized = false;
+      _uploadFailed = false;
+      document.getElementById('recordStartBtn').disabled = false;
+      document.getElementById('recordStopBtn').disabled = true;
     }
 
     async function flushChunkQueue(){
@@ -354,10 +351,8 @@
       }catch(e){
         _uploadFailed = true;
         document.getElementById('recordStatus').textContent = 'Upload falhou: ' + e.message;
-        if(_recorder && _recorder.state !== 'inactive'){
-          try{ _recorder.stop(); }catch(_){}
-        }
-        resetRecordingState();
+        document.getElementById('recordStartBtn').disabled = false;
+        document.getElementById('recordStopBtn').disabled = true;
       }finally{
         _uploadInFlight = false;
       }
