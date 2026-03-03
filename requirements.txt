@@ -1,6 +1,7 @@
 Django>=4.0
 channels>=4.0
 djangorestframework>=3.12
+django-cors-headers>=4.0
 # channels_redis is optional; in-memory layer is used by default
 # channels_redis>=4.0
  

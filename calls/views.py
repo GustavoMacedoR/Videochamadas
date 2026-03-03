@@ -146,7 +146,8 @@ class RecordingChunkUploadView(APIView):
             recording = Recording.objects.create(file=File(temp_file, name=safe_name))
 
         try:
-            temp_path.unlink(missing_ok=True)
+            if temp_path.exists():
+                temp_path.unlink()
         except Exception:
             pass
 
