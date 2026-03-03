@@ -97,7 +97,28 @@ class RecordingUploadView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request, format=None):
-        """List recordings with absolute file URLs."""
+        """List recordings with absolute file URLs.
+
+        Also scans media/recordings/ on disk and auto-registers any .webm/.mp4
+        files found there that are not yet in the database, so recordings saved
+        directly to the filesystem (e.g. by the Playwright recorder script) are
+        always visible via this endpoint.
+        """
+        # --- sync disk → DB ---
+        recordings_dir = Path(settings.MEDIA_ROOT) / 'recordings'
+        recordings_dir.mkdir(parents=True, exist_ok=True)
+        known_names = set(Recording.objects.values_list('file', flat=True))
+        for fpath in sorted(recordings_dir.iterdir()):
+            if fpath.suffix.lower() not in {'.webm', '.mp4', '.mkv'}:
+                continue
+            relative = f'recordings/{fpath.name}'
+            if relative not in known_names:
+                try:
+                    Recording.objects.create(file=relative)
+                except Exception:
+                    pass  # race condition / duplicate, ignore
+
+        # --- return full list ---
         qs = Recording.objects.all().order_by('-created_at')
         data = []
         for r in qs:
@@ -117,9 +138,9 @@ class RecordingUploadView(APIView):
                 'id': str(r.id),
                 'file': r.file.name if r.file else None,
                 'url': file_url,
-                'minutes_status': r.minutes_status,
+                'minutes_status': getattr(r, 'minutes_status', None),
                 'minutes_url': minutes_url,
-                'minutes_generated_at': r.minutes_generated_at,
+                'minutes_generated_at': getattr(r, 'minutes_generated_at', None),
                 'created_at': r.created_at,
             })
         return Response(data)

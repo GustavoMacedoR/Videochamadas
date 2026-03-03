@@ -21,7 +21,22 @@ class CallConsumer(AsyncWebsocketConsumer):
         except Exception:
             return
 
-        # Relay signaling messages to the room group, include sender to avoid loops
+        msg_type = data.get('type')
+
+        if msg_type == 'chat':
+            # Only relay name + message; discard any other fields for safety
+            payload = {
+                'type': 'chat',
+                'name': str(data.get('name', 'Anônimo'))[:80],
+                'message': str(data.get('message', ''))[:1000],
+            }
+            await self.channel_layer.group_send(
+                self.group_name,
+                {'type': 'chat.message', 'sender': self.channel_name, 'data': payload},
+            )
+            return
+
+        # Relay all other signaling messages to the room group, include sender to avoid loops
         await self.channel_layer.group_send(
             self.group_name,
             {
@@ -30,6 +45,12 @@ class CallConsumer(AsyncWebsocketConsumer):
                 'data': data,
             }
         )
+
+    async def chat_message(self, event):
+        # Don't echo back to the sender (they already rendered the message locally)
+        if event.get('sender') == self.channel_name:
+            return
+        await self.send(text_data=json.dumps(event.get('data')))
 
     async def signal_message(self, event):
         # Don't send message back to originating channel
