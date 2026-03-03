@@ -19,5 +19,5 @@ urlpatterns = [
 # Serve media files during development when DEBUG=True
 if settings.DEBUG:
     urlpatterns += [
-        re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+        re_path(r'^video/media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
     ]

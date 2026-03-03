@@ -78,7 +78,7 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'static'
 
 # Media files (recordings upload)
-MEDIA_URL = '/media/'
+MEDIA_URL = '/video/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # Channels - use in-memory layer for simplicity (no Redis required)

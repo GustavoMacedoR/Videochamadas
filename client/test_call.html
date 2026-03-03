@@ -24,6 +24,32 @@
     #chatSendBtn{padding:6px 12px;background:#0078d4;color:#fff;border:none;border-radius:4px;cursor:pointer;}
     #chatSendBtn:hover{background:#005fa3;}
     #chatNameInput{padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:0.85em;width:120px;}
+    /* Raise hand */
+    #handBox{
+      display:none;margin-top:10px;border:1px solid #e8c840;border-radius:6px;
+      width:100%;max-width:600px;font-family:Arial,Helvetica,sans-serif;background:#fffdf0;
+    }
+    #handBoxHeader{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:6px 10px;border-bottom:1px solid #e8c840;
+    }
+    #handBoxHeader h4{margin:0;font-size:0.95em;color:#7a6000;}
+    #raiseHandBtn{
+      padding:5px 14px;border:none;border-radius:4px;cursor:pointer;
+      font-size:0.9em;background:#f5c518;color:#333;font-weight:bold;
+    }
+    #raiseHandBtn.raised{background:#e05c00;color:#fff;}
+    #raiseHandBtn:disabled{opacity:.5;cursor:default;}
+    #handQueue{list-style:none;margin:0;padding:6px 10px;min-height:32px;}
+    #handQueue li{
+      padding:4px 8px;margin:3px 0;border-radius:4px;font-size:0.9em;
+      background:#fff8d0;border:1px solid #e8c840;display:flex;align-items:center;gap:8px;
+    }
+    #handQueue li.speaking{background:#d4f5d4;border-color:#4caf50;font-weight:bold;}
+    .hand-pos{font-weight:bold;color:#7a6000;min-width:22px;text-align:center;}
+    .hand-name{flex:1;}
+    .hand-lower-btn{font-size:0.8em;padding:2px 8px;background:#ccc;border:none;border-radius:3px;cursor:pointer;}
+    .hand-lower-btn:hover{background:#bbb;}
   </style>
 </head>
 <body>
@@ -44,6 +70,14 @@
       <button id="recordStopBtn" disabled>Parar Gravação (Servidor)</button>
       <span id="recordStatus" style="margin-left:12px;color:#444"></span>
     </div>
+  </div>
+
+  <div id="handBox">
+    <div id="handBoxHeader">
+      <h4>✋ Fila para falar</h4>
+      <button id="raiseHandBtn" disabled>✋ Levantar Mão</button>
+    </div>
+    <ul id="handQueue"><li style="color:#aaa;font-size:.85em;padding:4px 8px">Nenhuma mão levantada.</li></ul>
   </div>
 
   <div id="chatBox">
@@ -91,6 +125,9 @@
     // Chat
     let _chatName = '';
     const _chatMessages = []; // keep a brief in-memory log for the session
+    // Raise hand / speak queue
+    let _handQueue = [];        // [{clientId, name}] in raise order
+    let _myHandRaised = false;
 
     let __fakeMedia = null; // resources for fake media
 
@@ -287,6 +324,14 @@
         document.getElementById('chatBox').style.display = '';
         document.getElementById('chatMessages').innerHTML = '';
         _chatMessages.length = 0;
+        // enable hand panel
+        _handQueue = [];
+        _myHandRaised = false;
+        document.getElementById('handBox').style.display = '';
+        document.getElementById('raiseHandBtn').disabled = false;
+        document.getElementById('raiseHandBtn').textContent = '✋ Levantar Mão';
+        document.getElementById('raiseHandBtn').classList.remove('raised');
+        renderHandQueue();
         // announce ourselves to the room so existing peers will create offers
         sendMessage({type: 'join', client_id: clientId});
       };
@@ -306,6 +351,22 @@
 
         if(data.type === 'chat'){
           appendChatMessage(data.name || 'Anônimo', data.message || '', false);
+          return;
+        }
+
+        if(data.type === 'hand_raise'){
+          const cid = data.client_id || '';
+          if(cid && !_handQueue.find(e => e.clientId === cid)){
+            _handQueue.push({clientId: cid, name: data.name || 'Anônimo'});
+            renderHandQueue();
+          }
+          return;
+        }
+
+        if(data.type === 'hand_lower'){
+          const cid = data.client_id || '';
+          _handQueue = _handQueue.filter(e => e.clientId !== cid);
+          renderHandQueue();
           return;
         }
 
@@ -398,6 +459,12 @@
       document.getElementById('chatBox').style.display = 'none';
       document.getElementById('chatMessages').innerHTML = '';
       _chatMessages.length = 0;
+      // hide and clear hand queue
+      document.getElementById('handBox').style.display = 'none';
+      document.getElementById('raiseHandBtn').disabled = true;
+      _handQueue = [];
+      _myHandRaised = false;
+      renderHandQueue();
     };
 
     // Chat helpers
@@ -418,6 +485,69 @@
         .replace(/&/g,'&amp;').replace(/</g,'&lt;')
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
+
+    // --- Raise hand / speak queue ---
+    function renderHandQueue(){
+      const ul = document.getElementById('handQueue');
+      if(!_handQueue.length){
+        ul.innerHTML = '<li style="color:#aaa;font-size:.85em;padding:4px 8px">Nenhuma mão levantada.</li>';
+        return;
+      }
+      ul.innerHTML = '';
+      _handQueue.forEach((entry, idx) => {
+        const isMe = entry.clientId === clientId;
+        const isSpeaking = idx === 0;
+        const li = document.createElement('li');
+        if(isSpeaking) li.classList.add('speaking');
+        const pos = document.createElement('span');
+        pos.className = 'hand-pos';
+        pos.textContent = isSpeaking ? '🎙️' : `${idx + 1}º`;
+        const name = document.createElement('span');
+        name.className = 'hand-name';
+        name.textContent = escapeHtml(entry.name) + (isSpeaking ? ' — sua vez!' : '');
+        li.appendChild(pos);
+        li.appendChild(name);
+        // show lower button only for own entry
+        if(isMe){
+          const btn = document.createElement('button');
+          btn.className = 'hand-lower-btn';
+          btn.textContent = 'Abaixar';
+          btn.onclick = () => lowerHand();
+          li.appendChild(btn);
+        }
+        ul.appendChild(li);
+      });
+    }
+
+    function raiseHand(){
+      if(!ws || ws.readyState !== WebSocket.OPEN) return;
+      const name = document.getElementById('chatNameInput').value.trim() || _chatName || 'Participante';
+      _myHandRaised = true;
+      // add own entry locally immediately so it feels instant
+      if(!_handQueue.find(e => e.clientId === clientId)){
+        _handQueue.push({clientId, name});
+        renderHandQueue();
+      }
+      sendMessage({type: 'raise_hand', client_id: clientId, name});
+      const btn = document.getElementById('raiseHandBtn');
+      btn.textContent = '✋ Abaixar Mão';
+      btn.classList.add('raised');
+    }
+
+    function lowerHand(){
+      if(!ws || ws.readyState !== WebSocket.OPEN) return;
+      _myHandRaised = false;
+      _handQueue = _handQueue.filter(e => e.clientId !== clientId);
+      renderHandQueue();
+      sendMessage({type: 'lower_hand', client_id: clientId});
+      const btn = document.getElementById('raiseHandBtn');
+      btn.textContent = '✋ Levantar Mão';
+      btn.classList.remove('raised');
+    }
+
+    document.getElementById('raiseHandBtn').onclick = () => {
+      if(_myHandRaised){ lowerHand(); } else { raiseHand(); }
+    };
 
     document.getElementById('chatForm').onsubmit = (ev) => {
       ev.preventDefault();
