@@ -1,8 +1,0 @@
-venv
-__pycache__
-*.pyc
-.git
-media/recordings
-node_modules
-*.sqlite3
-.env
