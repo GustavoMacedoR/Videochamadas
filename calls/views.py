@@ -20,8 +20,23 @@ from .server_recording import start_server_recording, stop_server_recording, get
 
 
 class RoomViewSet(viewsets.ModelViewSet):
-    queryset = Room.objects.all().order_by('-created_at')
     serializer_class = RoomSerializer
+
+    def get_queryset(self):
+        qs = Room.objects.all().order_by('-created_at')
+        name = self.request.query_params.get('name', '').strip()
+        id_q = self.request.query_params.get('id', '').strip()
+        date_q = self.request.query_params.get('date', '').strip()
+        if name:
+            qs = qs.filter(name__icontains=name)
+        if id_q:
+            qs = qs.filter(id__icontains=id_q)
+        if date_q:
+            try:
+                qs = qs.filter(created_at__date=date_q)
+            except (ValueError, TypeError):
+                pass
+        return qs
 
 
 class CouchExampleView(APIView):
