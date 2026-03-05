@@ -1,0 +1,1143 @@
+openapi: 3.0.3
+info:
+  title: Videochamadas API
+  version: 1.0.0
+  description: |
+    Especificação Swagger/OpenAPI da aplicação Videochamadas.
+
+    Esta spec documenta todos os endpoints HTTP expostos no projeto e também
+    o endpoint de sinalização WebSocket.
+servers:
+  - url: http://127.0.0.1:8000
+    description: Desenvolvimento local (runserver)
+  - url: /video
+    description: Ambiente com proxy usando prefixo /video
+
+tags:
+  - name: Navegação
+    description: Rotas HTTP fora de /api
+  - name: Rooms
+    description: CRUD de salas
+  - name: CouchDB
+    description: Endpoints auxiliares para documentos CouchDB
+  - name: Recordings
+    description: Upload e consulta de gravações
+  - name: Server Recording
+    description: Controle de gravação server-side por sala
+  - name: TURN
+    description: Configuração ICE (STUN/TURN)
+  - name: WebSocket
+    description: Sinalização WebRTC via WebSocket
+
+paths:
+  /admin/:
+    get:
+      tags: [Navegação]
+      summary: Admin Django
+      operationId: getAdmin
+      responses:
+        '200':
+          description: Página HTML do admin
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /client/{path}:
+    get:
+      tags: [Navegação]
+      summary: Arquivo estático do cliente
+      description: Serve arquivos da pasta client/ em desenvolvimento.
+      operationId: getClientFile
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          example: rooms.html
+      responses:
+        '200':
+          description: Arquivo retornado
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+
+  /:
+    get:
+      tags: [Navegação]
+      summary: Redirect raiz
+      description: Redireciona para /client/rooms.html
+      operationId: redirectRoot
+      responses:
+        '302':
+          description: Redirecionamento
+          headers:
+            Location:
+              schema:
+                type: string
+              example: /client/rooms.html
+
+  /call/:
+    get:
+      tags: [Navegação]
+      summary: Shortcut para página de chamada
+      description: Redireciona para /client/test_call.html
+      operationId: redirectCall
+      responses:
+        '302':
+          description: Redirecionamento
+          headers:
+            Location:
+              schema:
+                type: string
+              example: /client/test_call.html
+
+  /call/{room}/:
+    get:
+      tags: [Navegação]
+      summary: Shortcut para chamada com sala
+      description: Redireciona para /client/test_call.html?room={room}
+      operationId: redirectCallRoom
+      parameters:
+        - name: room
+          in: path
+          required: true
+          schema:
+            type: string
+          example: sala-1
+      responses:
+        '302':
+          description: Redirecionamento
+          headers:
+            Location:
+              schema:
+                type: string
+              example: /client/test_call.html?room=sala-1
+
+  /video/media/{path}:
+    get:
+      tags: [Navegação]
+      summary: Arquivo de mídia (DEBUG=True)
+      description: Endpoint disponível em desenvolvimento para servir gravações.
+      operationId: getMediaFile
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          example: recordings/exemplo.webm
+      responses:
+        '200':
+          description: Arquivo de mídia retornado
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /api/:
+    get:
+      tags: [Rooms]
+      summary: API root (DRF)
+      operationId: getApiRoot
+      responses:
+        '200':
+          description: Lista de recursos registrados
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: uri
+              example:
+                rooms: http://127.0.0.1:8000/api/rooms/
+
+  /api/rooms/:
+    get:
+      tags: [Rooms]
+      summary: Listar salas
+      operationId: listRooms
+      parameters:
+        - name: name
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filtro icontains por nome
+        - name: id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filtro icontains por UUID
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Filtro por data de criação (YYYY-MM-DD)
+      responses:
+        '200':
+          description: Lista de salas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Room'
+    post:
+      tags: [Rooms]
+      summary: Criar sala
+      operationId: createRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomCreateRequest'
+            example:
+              name: Turma A
+      responses:
+        '201':
+          description: Sala criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Room'
+
+  /api/rooms/{id}/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        example: 203c13ed-4f61-448f-b326-f947f6644fe0
+    get:
+      tags: [Rooms]
+      summary: Detalhar sala
+      operationId: getRoom
+      responses:
+        '200':
+          description: Sala encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Room'
+        '404':
+          description: Sala não encontrada
+    put:
+      tags: [Rooms]
+      summary: Atualizar sala (completa)
+      operationId: updateRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomCreateRequest'
+      responses:
+        '200':
+          description: Sala atualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Room'
+    patch:
+      tags: [Rooms]
+      summary: Atualizar sala (parcial)
+      operationId: partialUpdateRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomCreateRequest'
+      responses:
+        '200':
+          description: Sala atualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Room'
+    delete:
+      tags: [Rooms]
+      summary: Remover sala
+      operationId: deleteRoom
+      responses:
+        '204':
+          description: Sala removida
+
+  /api/couch/example/:
+    post:
+      tags: [CouchDB]
+      summary: Criar documento de exemplo no CouchDB
+      operationId: createCouchExample
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            example:
+              type: nota
+              titulo: Teste
+      responses:
+        '201':
+          description: Documento criado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CouchCreateResponse'
+        '500':
+          description: Erro ao criar documento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/couch/docs/:
+    get:
+      tags: [CouchDB]
+      summary: Listar documentos CouchDB
+      operationId: listCouchDocs
+      responses:
+        '200':
+          description: Lista de documentos (formato depende do client CouchDB)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '500':
+          description: Erro ao listar documentos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/couch/docs/{doc_id}/:
+    parameters:
+      - name: doc_id
+        in: path
+        required: true
+        schema:
+          type: string
+        example: abc123
+    get:
+      tags: [CouchDB]
+      summary: Buscar documento CouchDB
+      operationId: getCouchDoc
+      responses:
+        '200':
+          description: Documento retornado
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '404':
+          description: Documento não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags: [CouchDB]
+      summary: Atualizar documento CouchDB
+      operationId: updateCouchDoc
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Documento atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Erro ao atualizar documento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [CouchDB]
+      summary: Excluir documento CouchDB
+      operationId: deleteCouchDoc
+      responses:
+        '200':
+          description: Documento removido
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Erro ao excluir documento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings/:
+    get:
+      tags: [Recordings]
+      summary: Listar gravações
+      description: |
+        Lista gravações ordenadas por data de criação (desc).
+        Também sincroniza arquivos em media/recordings para o banco.
+      operationId: listRecordings
+      responses:
+        '200':
+          description: Lista de gravações
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RecordingListItem'
+    post:
+      tags: [Recordings]
+      summary: Upload simples de gravação
+      operationId: uploadRecording
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                participants_json:
+                  type: string
+                  description: JSON serializado com lista de participantes
+                  example: '["Professor","Aluno"]'
+      responses:
+        '201':
+          description: Gravação criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingUploadResponse'
+        '400':
+          description: Erro de validação
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/recordings/chunk/:
+    post:
+      tags: [Recordings]
+      summary: Upload chunked de gravação
+      operationId: uploadRecordingChunk
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [upload_id]
+              properties:
+                upload_id:
+                  type: string
+                  example: sala-1-tokenxyz
+                filename:
+                  type: string
+                  example: sala-1.webm
+                is_last:
+                  type: string
+                  description: Aceita 1|true|yes para finalizar upload
+                  example: '0'
+                chunk:
+                  type: string
+                  format: binary
+                participants:
+                  type: string
+                  description: JSON serializado com lista de participantes (usado na finalização)
+                  example: '["Professor","Aluno"]'
+      responses:
+        '200':
+          description: Chunk parcial recebido (quando is_last não é verdadeiro)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChunkProgressResponse'
+        '201':
+          description: Upload finalizado e gravação criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingListItem'
+        '400':
+          description: Erro de validação/finalização
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings/{recording_id}/minutes/:
+    get:
+      tags: [Recordings]
+      summary: Obter minutos/ata da gravação
+      operationId: getRecordingMinutes
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: 8f53e700-d117-4980-b7ca-e7d57465f004
+      responses:
+        '200':
+          description: Estado e conteúdo dos minutos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingMinutesResponse'
+        '404':
+          description: Gravação não encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings/server/start/:
+    post:
+      tags: [Server Recording]
+      summary: Iniciar gravação server-side
+      operationId: startServerRecording
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_name]
+              properties:
+                room_name:
+                  type: string
+                  example: sala-1
+                started_by:
+                  type: string
+                  description: Opcional; fallback para client_id ou server
+                  example: cliente-abc
+                client_id:
+                  type: string
+                  description: Usado como fallback para started_by
+      responses:
+        '200':
+          description: Gravação iniciada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerRecordingActionResponse'
+        '409':
+          description: Conflito ao iniciar gravação
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerRecordingActionResponse'
+
+  /api/recordings/server/stop/:
+    post:
+      tags: [Server Recording]
+      summary: Encerrar gravação server-side
+      operationId: stopServerRecording
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_name]
+              properties:
+                room_name:
+                  type: string
+                  example: sala-1
+                stopped_by:
+                  type: string
+                  description: Opcional; fallback para client_id ou server
+                  example: cliente-abc
+                client_id:
+                  type: string
+                  description: Usado como fallback para stopped_by
+      responses:
+        '200':
+          description: Gravação encerrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerRecordingActionResponse'
+        '409':
+          description: Conflito ao encerrar gravação
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerRecordingActionResponse'
+
+  /api/recordings/server/status/:
+    get:
+      tags: [Server Recording]
+      summary: Consultar status da gravação da sala
+      operationId: getServerRecordingStatus
+      parameters:
+        - name: room_name
+          in: query
+          required: false
+          schema:
+            type: string
+          example: sala-1
+      responses:
+        '200':
+          description: Status atual da gravação para a sala
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerRecordingStatusResponse'
+
+  /api/recordings/server/complete/:
+    post:
+      tags: [Server Recording]
+      summary: Callback de gravação pronta (ou erro)
+      description: Usado internamente pelo gravador server-side para notificar a sala via WebSocket.
+      operationId: completeServerRecording
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_name, recording]
+              properties:
+                room_name:
+                  type: string
+                  example: sala-1
+                recording:
+                  type: object
+                  additionalProperties: true
+                  description: Dados da gravação pronta ou objeto com chave error
+                  example:
+                    id: 8f53e700-d117-4980-b7ca-e7d57465f004
+                    url: http://127.0.0.1:8000/video/media/recordings/sala-1.webm
+                    minutes_url: http://127.0.0.1:8000/video/api/recordings/8f53e700-d117-4980-b7ca-e7d57465f004/minutes/
+      responses:
+        '200':
+          description: Notificação aceita
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Body inválido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/turn/:
+    get:
+      tags: [TURN]
+      summary: Obter ICE servers (STUN/TURN)
+      operationId: getTurnConfig
+      responses:
+        '200':
+          description: Configuração de servidores ICE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TurnConfigResponse'
+
+  /ws/calls/{room_name}/:
+    get:
+      tags: [WebSocket]
+      summary: Endpoint de sinalização WebSocket
+      description: |
+        Endpoint WebSocket para sinalização WebRTC.
+
+        **URL de conexão**
+        - `ws://<host>/ws/calls/{room_name}/`
+        - Em produção com HTTPS, use `wss://`.
+
+        **Fluxo do chat**
+        1. Cliente envia `{ "type": "chat", "name": "...", "message": "..." }`.
+        2. Servidor valida e limita campos (`name` até 80, `message` até 1000).
+        3. Servidor retransmite para os outros participantes da sala (sem eco ao remetente).
+
+        **Exemplo pronto (cliente -> servidor)**
+        ```json
+        {
+          "type": "chat",
+          "name": "Gustavo",
+          "message": "Olá turma, tudo bem?"
+        }
+        ```
+
+        **Exemplo pronto (servidor -> clientes)**
+        ```json
+        {
+          "type": "chat",
+          "name": "Gustavo",
+          "message": "Olá turma, tudo bem?"
+        }
+        ```
+
+        Observação: OpenAPI/Swagger não executa handshake WebSocket nativamente,
+        então este endpoint é documentado para referência de contrato.
+      operationId: wsCallsRoom
+      parameters:
+        - name: room_name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: sala-1
+      responses:
+        '101':
+          description: Protocolos atualizados para WebSocket (Upgrade)
+      x-websocket:
+        chatQuickLinks:
+          sendSchema: '#/components/schemas/WsChatMessage'
+          receiveSchema: '#/components/schemas/WsChatMessage'
+        clientToServer:
+          - $ref: '#/components/schemas/WsJoinMessage'
+          - $ref: '#/components/schemas/WsOfferMessage'
+          - $ref: '#/components/schemas/WsAnswerMessage'
+          - $ref: '#/components/schemas/WsCandidateMessage'
+          - $ref: '#/components/schemas/WsChatMessage'
+          - $ref: '#/components/schemas/WsRaiseHandMessage'
+          - $ref: '#/components/schemas/WsLowerHandMessage'
+        serverToClient:
+          - description: Repassa mensagens de sinalização para outros peers (sem eco para remetente)
+          - $ref: '#/components/schemas/WsChatMessage'
+          - $ref: '#/components/schemas/WsHandRaiseEvent'
+          - $ref: '#/components/schemas/WsHandLowerEvent'
+          - $ref: '#/components/schemas/WsRecordingStartedEvent'
+          - $ref: '#/components/schemas/WsRecordingStoppedEvent'
+          - $ref: '#/components/schemas/WsRecordingReadyEvent'
+        chatExamples:
+          clientToServer:
+            summary: Mensagem enviada por um participante
+            value:
+              type: chat
+              name: Gustavo
+              message: Olá turma, tudo bem?
+          serverToClient:
+            summary: Mensagem retransmitida para os demais participantes
+            value:
+              type: chat
+              name: Gustavo
+              message: Olá turma, tudo bem?
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+      example:
+        error: mensagem do erro
+
+    OkResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      required: [ok]
+      example:
+        ok: true
+
+    Room:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required: [id, name, created_at]
+      example:
+        id: 203c13ed-4f61-448f-b326-f947f6644fe0
+        name: Turma A
+        created_at: '2026-03-05T13:10:00Z'
+
+    RoomCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+      additionalProperties: false
+
+    CouchCreateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+      required: [id]
+      example:
+        id: f3d2b4...
+
+    RecordingUploadResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        file:
+          type: string
+          description: URL/arquivo retornado pelo serializer
+        participants_json:
+          type: string
+        minutes_status:
+          type: string
+          enum: [pending, processing, done, failed]
+        minutes_text:
+          type: string
+        minutes_error:
+          type: string
+        minutes_generated_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        minutes_url:
+          type: string
+          format: uri
+      required:
+        - id
+        - file
+        - participants_json
+        - minutes_status
+        - minutes_text
+        - minutes_error
+        - created_at
+        - minutes_url
+
+    RecordingListItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        file:
+          type: string
+          nullable: true
+        url:
+          type: string
+          format: uri
+          nullable: true
+        minutes_status:
+          type: string
+          enum: [pending, processing, done, failed]
+          nullable: true
+        minutes_url:
+          type: string
+          format: uri
+          nullable: true
+        minutes_generated_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - created_at
+
+    ChunkProgressResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        upload_id:
+          type: string
+        size:
+          type: integer
+      required: [ok, upload_id, size]
+      example:
+        ok: true
+        upload_id: sala-1-tokenxyz
+        size: 524288
+
+    RecordingMinutesResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        recording_url:
+          type: string
+          format: uri
+          nullable: true
+        minutes_status:
+          type: string
+          enum: [pending, processing, done, failed]
+        minutes_generated_at:
+          type: string
+          format: date-time
+          nullable: true
+        minutes_error:
+          type: string
+        minutes_text:
+          type: string
+      required:
+        - id
+        - minutes_status
+        - minutes_error
+        - minutes_text
+
+    ServerRecordingActionResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        message:
+          type: string
+        room_name:
+          type: string
+          nullable: true
+        is_recording:
+          type: boolean
+        started_by:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [ok, message, room_name]
+
+    ServerRecordingStatusResponse:
+      type: object
+      properties:
+        room_name:
+          type: string
+          nullable: true
+        is_recording:
+          type: boolean
+        started_by:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [room_name, is_recording, started_by, started_at]
+
+    TurnConfigResponse:
+      type: object
+      properties:
+        iceServers:
+          type: array
+          items:
+            $ref: '#/components/schemas/IceServer'
+      required: [iceServers]
+
+    IceServer:
+      type: object
+      properties:
+        urls:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        username:
+          type: string
+        credential:
+          type: string
+      required: [urls]
+
+    WsJoinMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [join]
+        client_id:
+          type: string
+      required: [type, client_id]
+      example:
+        type: join
+        client_id: cliente-abc
+
+    WsOfferMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [offer]
+        sdp:
+          type: string
+        to:
+          type: string
+        from:
+          type: string
+      required: [type, sdp, to, from]
+
+    WsAnswerMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [answer]
+        sdp:
+          type: string
+        to:
+          type: string
+        from:
+          type: string
+      required: [type, sdp, to, from]
+
+    WsCandidateMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [candidate]
+        candidate:
+          type: object
+          additionalProperties: true
+        to:
+          type: string
+        from:
+          type: string
+      required: [type, candidate, to, from]
+
+    WsChatMessage:
+      type: object
+      description: Mensagem de chat trocada entre clientes da mesma sala.
+      properties:
+        type:
+          type: string
+          enum: [chat]
+        name:
+          type: string
+          maxLength: 80
+        message:
+          type: string
+          maxLength: 1000
+      required: [type, name, message]
+      example:
+        type: chat
+        name: Gustavo
+        message: Olá
+
+    WsRaiseHandMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [raise_hand]
+        client_id:
+          type: string
+          maxLength: 40
+        name:
+          type: string
+          maxLength: 80
+      required: [type, client_id, name]
+
+    WsLowerHandMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [lower_hand]
+        client_id:
+          type: string
+          maxLength: 40
+      required: [type, client_id]
+
+    WsHandRaiseEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [hand_raise]
+        client_id:
+          type: string
+        name:
+          type: string
+      required: [type, client_id, name]
+
+    WsHandLowerEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [hand_lower]
+        client_id:
+          type: string
+      required: [type, client_id]
+
+    WsRecordingStartedEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [recording_started]
+        room_name:
+          type: string
+        started_by:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [type, room_name, started_by, started_at]
+
+    WsRecordingStoppedEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [recording_stopped]
+        room_name:
+          type: string
+        stopped_by:
+          type: string
+        stopped_at:
+          type: string
+          format: date-time
+      required: [type, room_name, stopped_by, stopped_at]
+
+    WsRecordingReadyEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [recording_ready]
+        room_name:
+          type: string
+        recording:
+          type: object
+          additionalProperties: true
+      required: [type, room_name, recording]
