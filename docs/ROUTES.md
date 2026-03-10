@@ -108,6 +108,55 @@ Resposta típica:
 
 ### 3.1 Rooms
 
+#### 3.1.0 `GET /api/roms/`
+Retorna salas no formato usado pelo cliente de histórico/downloads.
+
+Query params opcionais (mesmos filtros de `rooms`):
+- `name`: filtro `icontains` no nome.
+- `id`: filtro `icontains` no UUID.
+- `date`: filtro por data de criação (`YYYY-MM-DD`).
+
+```bash
+curl -s "$API_BASE/roms/" | jq
+```
+
+Resposta `200` (exemplo):
+
+```json
+[
+  {
+    "id": "203c13ed-4f61-448f-b326-f947f6644fe0",
+    "name": "Turma A",
+    "created_at": "2026-03-05T13:10:00.000Z",
+    "participants": [
+      {
+        "name": "Ana Souza",
+        "roles": ["ALUNO"],
+        "imageUrl": null
+      }
+    ],
+    "donwloads": {
+      "recordings": [
+        {
+          "id": "rec-7e6dc0d5-6e08-4892-bdb6-5984a2e50d72",
+          "date": "2026-03-05T13:45:00.000Z",
+          "duration": "35 min",
+          "downloadUrl": "http://127.0.0.1:8000/video/media/recordings/turma-a-20260305-134500.webm"
+        }
+      ],
+      "atas": [
+        {
+          "id": "ata-7e6dc0d5-6e08-4892-bdb6-5984a2e50d72",
+          "date": "2026-03-05T14:10:00.000Z",
+          "duration": "35 min",
+          "downloadUrl": "http://127.0.0.1:8000/api/recordings/7e6dc0d5-6e08-4892-bdb6-5984a2e50d72/minutes/"
+        }
+      ]
+    }
+  }
+]
+```
+
 #### 3.1.1 `GET /api/rooms/`
 Lista salas ordenadas por `created_at` desc.
 

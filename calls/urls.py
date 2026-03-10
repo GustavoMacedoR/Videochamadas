@@ -1,12 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import RoomViewSet, CouchExampleView, CouchDocsList, CouchDocDetail, RecordingUploadView, RecordingChunkUploadView, RecordingMinutesView, RoomRecordingStartView, RoomRecordingStopView, RoomRecordingStatusView, RoomRecordingCompleteView
+from .views import RoomViewSet, RomsListView, CouchExampleView, CouchDocsList, CouchDocDetail, RecordingUploadView, RecordingChunkUploadView, RecordingMinutesView, RoomRecordingStartView, RoomRecordingStopView, RoomRecordingStatusView, RoomRecordingCompleteView
 from .turn_view import TurnConfigView
 
 router = DefaultRouter()
 router.register(r'rooms', RoomViewSet, basename='room')
 
 urlpatterns = [
+    path('roms', RomsListView.as_view(), name='roms-list-no-slash'),
+    path('roms/', RomsListView.as_view(), name='roms-list'),
     path('', include(router.urls)),
     path('couch/example/', CouchExampleView.as_view(), name='couch-example'),
 ]

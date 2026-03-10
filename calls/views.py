@@ -10,33 +10,227 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.core.files.base import File
+from datetime import timezone as datetime_timezone
 from pathlib import Path
 from uuid import uuid4
 import os
 import json
+import re
+import math
 
 from .transcription import enqueue_minutes_generation
 from .server_recording import start_server_recording, stop_server_recording, get_room_recording_status, notify_recording_ready
+
+
+MINUTES_RANGE_PATTERN = re.compile(r'\[(\d{2}:\d{2}:\d{2})-(\d{2}:\d{2}:\d{2})\]')
+
+
+def _filter_rooms_queryset(request):
+    qs = Room.objects.all().order_by('-created_at')
+    name = request.query_params.get('name', '').strip()
+    id_q = request.query_params.get('id', '').strip()
+    date_q = request.query_params.get('date', '').strip()
+    if name:
+        qs = qs.filter(name__icontains=name)
+    if id_q:
+        qs = qs.filter(id__icontains=id_q)
+    if date_q:
+        try:
+            qs = qs.filter(created_at__date=date_q)
+        except (ValueError, TypeError):
+            pass
+    return qs
+
+
+def _format_datetime_iso8601(value):
+    if value is None:
+        return None
+    try:
+        if value.tzinfo is not None:
+            value = value.astimezone(datetime_timezone.utc)
+        formatted = value.isoformat(timespec='milliseconds')
+        if formatted.endswith('+00:00'):
+            return formatted.replace('+00:00', 'Z')
+        return formatted
+    except Exception:
+        return str(value)
+
+
+def _parse_recording_participants(recording):
+    if not recording.participants_json:
+        return []
+    try:
+        parsed = json.loads(recording.participants_json)
+    except Exception:
+        return []
+
+    if isinstance(parsed, list):
+        return parsed
+    return [parsed]
+
+
+def _normalize_participant(raw_participant):
+    if isinstance(raw_participant, dict):
+        name = str(raw_participant.get('name', '')).strip()
+        if not name:
+            return None
+
+        raw_roles = raw_participant.get('roles')
+        if isinstance(raw_roles, str):
+            roles = [raw_roles]
+        elif isinstance(raw_roles, list):
+            roles = raw_roles
+        else:
+            roles = []
+
+        normalized_roles = [str(role).strip() for role in roles if str(role).strip()]
+
+        image_url = raw_participant.get('imageUrl')
+        if image_url is None:
+            image_url = raw_participant.get('image_url')
+        normalized_image_url = str(image_url).strip() if image_url else None
+
+        return {
+            'name': name,
+            'roles': normalized_roles,
+            'imageUrl': normalized_image_url,
+        }
+
+    name = str(raw_participant).strip()
+    if not name:
+        return None
+    return {
+        'name': name,
+        'roles': [],
+        'imageUrl': None,
+    }
+
+
+def _merge_participants(recordings):
+    participants_by_name = {}
+
+    for recording in recordings:
+        for participant in _parse_recording_participants(recording):
+            normalized = _normalize_participant(participant)
+            if not normalized:
+                continue
+
+            participant_key = normalized['name'].casefold()
+            current = participants_by_name.get(participant_key)
+            if current is None:
+                participants_by_name[participant_key] = normalized
+                continue
+
+            current_roles = set(current['roles'])
+            for role in normalized['roles']:
+                if role not in current_roles:
+                    current['roles'].append(role)
+                    current_roles.add(role)
+
+            if not current.get('imageUrl') and normalized.get('imageUrl'):
+                current['imageUrl'] = normalized['imageUrl']
+
+    return list(participants_by_name.values())
+
+
+def _recording_matches_room(recording, room):
+    if not recording.file:
+        return False
+
+    file_name = (recording.file.name or '').strip().casefold()
+    if not file_name:
+        return False
+
+    room_id = str(room.id).casefold()
+    room_name = (room.name or '').strip().casefold()
+
+    if room_id and room_id in file_name:
+        return True
+    if room_name and room_name in file_name:
+        return True
+    return False
+
+
+def _hhmmss_to_seconds(value):
+    try:
+        hours, minutes, seconds = value.split(':')
+        return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+    except Exception:
+        return 0
+
+
+def _estimate_duration_label(recording):
+    max_seconds = 0
+    minutes_text = recording.minutes_text or ''
+
+    for _start, end in MINUTES_RANGE_PATTERN.findall(minutes_text):
+        max_seconds = max(max_seconds, _hhmmss_to_seconds(end))
+
+    if max_seconds <= 0:
+        return None
+
+    minutes = max(1, int(math.ceil(max_seconds / 60)))
+    return f'{minutes} min'
+
+
+class RomsListView(APIView):
+    permission_classes = (AllowAny,)
+
+    def get(self, request):
+        rooms = list(_filter_rooms_queryset(request))
+        all_recordings = list(Recording.objects.all().order_by('-created_at'))
+
+        payload = []
+        for room in rooms:
+            room_recordings = [recording for recording in all_recordings if _recording_matches_room(recording, room)]
+            participants = _merge_participants(room_recordings)
+
+            recordings_payload = []
+            atas_payload = []
+
+            for recording in room_recordings:
+                recording_download_url = None
+                if recording.file:
+                    try:
+                        recording_download_url = request.build_absolute_uri(recording.file.url)
+                    except Exception:
+                        recording_download_url = recording.file.url
+
+                duration_label = _estimate_duration_label(recording)
+                recordings_payload.append({
+                    'id': f'rec-{recording.id}',
+                    'date': _format_datetime_iso8601(recording.created_at),
+                    'duration': duration_label,
+                    'downloadUrl': recording_download_url,
+                })
+
+                if recording.minutes_text or recording.minutes_generated_at or recording.minutes_status == Recording.MINUTES_DONE:
+                    atas_payload.append({
+                        'id': f'ata-{recording.id}',
+                        'date': _format_datetime_iso8601(recording.minutes_generated_at or recording.created_at),
+                        'duration': duration_label,
+                        'downloadUrl': request.build_absolute_uri(f'/api/recordings/{recording.id}/minutes/'),
+                    })
+
+            payload.append({
+                'id': str(room.id),
+                'name': room.name or None,
+                'created_at': _format_datetime_iso8601(room.created_at),
+                'participants': participants,
+                'donwloads': {
+                    'recordings': recordings_payload,
+                    'atas': atas_payload,
+                },
+            })
+
+        return Response(payload)
 
 
 class RoomViewSet(viewsets.ModelViewSet):
     serializer_class = RoomSerializer
 
     def get_queryset(self):
-        qs = Room.objects.all().order_by('-created_at')
-        name = self.request.query_params.get('name', '').strip()
-        id_q = self.request.query_params.get('id', '').strip()
-        date_q = self.request.query_params.get('date', '').strip()
-        if name:
-            qs = qs.filter(name__icontains=name)
-        if id_q:
-            qs = qs.filter(id__icontains=id_q)
-        if date_q:
-            try:
-                qs = qs.filter(created_at__date=date_q)
-            except (ValueError, TypeError):
-                pass
-        return qs
+        return _filter_rooms_queryset(self.request)
 
 
 class CouchExampleView(APIView):
