@@ -390,9 +390,9 @@ class RomsListView(APIView):
                 if recording.minutes_text or recording.minutes_generated_at or recording.minutes_status == Recording.MINUTES_DONE:
                     ata_download_url = None
                     try:
-                        ata_download_url = request.build_absolute_uri(f'/api/recordings/{recording.id}/minutes/')
+                        ata_download_url = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/')
                     except Exception:
-                        ata_download_url = f'/api/recordings/{recording.id}/minutes/'
+                        ata_download_url = f'/video/api/recordings/{recording.id}/minutes/'
                     atas_payload.append({
                         'id': f'ata-{recording.id}',
                         'date': _format_datetime_iso8601(recording.minutes_generated_at or recording.created_at),

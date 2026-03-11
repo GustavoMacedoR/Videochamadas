@@ -81,8 +81,14 @@ STATIC_ROOT = BASE_DIR / 'static'
 MEDIA_URL = '/video/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Automatic cleanup for media/recordings
+RECORDINGS_AUTO_CLEANUP_ENABLED = os.environ.get('RECORDINGS_AUTO_CLEANUP_ENABLED', '1').strip().lower() in {'1', 'true', 'yes', 'on'}
+try:
+    RECORDINGS_AUTO_CLEANUP_INTERVAL_MINUTES = max(1, int(os.environ.get('RECORDINGS_AUTO_CLEANUP_INTERVAL_MINUTES', '30')))
+except (TypeError, ValueError):
+    RECORDINGS_AUTO_CLEANUP_INTERVAL_MINUTES = 30
+
 # Channels - use in-memory layer for simplicity (no Redis required)
-import os
 
 # Configure CHANNEL_LAYERS: prefer Redis when CHANNEL_REDIS_URL is provided
 _redis_url = os.environ.get('CHANNEL_REDIS_URL')
