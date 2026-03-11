@@ -131,7 +131,7 @@
     }
 
     function openRoom(room){
-      const identifier = room.name || room.id;
+      const identifier = room.id;
       const url = `test_call.html?room=${encodeURIComponent(identifier)}`;
       window.open(url, '_blank');
     }

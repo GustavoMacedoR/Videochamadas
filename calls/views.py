@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .models import Room, Recording
+from .models import Room, Recording, RoomParticipant
 from .serializers import RoomSerializer
 from .serializers import RecordingSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -12,7 +12,7 @@ from django.conf import settings
 from django.core.files.base import File
 from datetime import timezone as datetime_timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 import os
 import json
 import re
@@ -58,6 +58,64 @@ def _format_datetime_iso8601(value):
         return str(value)
 
 
+def _resolve_room_from_identifier(identifier, create_if_missing=False):
+    value = str(identifier or '').strip()
+    if not value:
+        return None
+
+    try:
+        parsed_uuid = UUID(value)
+        room = Room.objects.filter(id=parsed_uuid).first()
+        if room is not None:
+            return room
+        if create_if_missing:
+            return Room.objects.create(id=parsed_uuid)
+        return None
+    except (ValueError, TypeError, AttributeError):
+        pass
+
+    room = Room.objects.filter(name__iexact=value).order_by('-created_at').first()
+    if room is not None:
+        return room
+
+    if create_if_missing:
+        return Room.objects.create(name=value)
+    return None
+
+
+def _normalize_roles(raw_roles):
+    if isinstance(raw_roles, str):
+        raw_roles = [raw_roles]
+    if not isinstance(raw_roles, list):
+        return []
+    return [str(role).strip() for role in raw_roles if str(role).strip()]
+
+
+def _normalize_participant_payload(raw_participant):
+    if isinstance(raw_participant, dict):
+        name = str(raw_participant.get('name', '')).strip()
+        if not name:
+            return None
+        image_url = raw_participant.get('imageUrl')
+        if image_url is None:
+            image_url = raw_participant.get('image_url')
+        image_url = str(image_url).strip() if image_url else None
+        return {
+            'name': name,
+            'roles': _normalize_roles(raw_participant.get('roles')),
+            'imageUrl': image_url,
+        }
+
+    name = str(raw_participant or '').strip()
+    if not name:
+        return None
+    return {
+        'name': name,
+        'roles': [],
+        'imageUrl': None,
+    }
+
+
 def _sync_recordings_from_disk():
     recordings_dir = Path(settings.MEDIA_ROOT) / 'recordings'
     recordings_dir.mkdir(parents=True, exist_ok=True)
@@ -67,8 +125,14 @@ def _sync_recordings_from_disk():
             continue
         relative = f'recordings/{fpath.name}'
         if relative not in known_names:
+            room_hint = _extract_room_name_hint('', fpath.name, '')
+            room_obj = _resolve_room_from_identifier(room_hint, create_if_missing=False)
             try:
-                Recording.objects.create(file=relative, room_name='')
+                Recording.objects.create(
+                    file=relative,
+                    room=room_obj,
+                    room_name=room_hint if room_hint else '',
+                )
             except Exception:
                 pass
 
@@ -105,40 +169,7 @@ def _parse_recording_participants(recording):
 
 
 def _normalize_participant(raw_participant):
-    if isinstance(raw_participant, dict):
-        name = str(raw_participant.get('name', '')).strip()
-        if not name:
-            return None
-
-        raw_roles = raw_participant.get('roles')
-        if isinstance(raw_roles, str):
-            roles = [raw_roles]
-        elif isinstance(raw_roles, list):
-            roles = raw_roles
-        else:
-            roles = []
-
-        normalized_roles = [str(role).strip() for role in roles if str(role).strip()]
-
-        image_url = raw_participant.get('imageUrl')
-        if image_url is None:
-            image_url = raw_participant.get('image_url')
-        normalized_image_url = str(image_url).strip() if image_url else None
-
-        return {
-            'name': name,
-            'roles': normalized_roles,
-            'imageUrl': normalized_image_url,
-        }
-
-    name = str(raw_participant).strip()
-    if not name:
-        return None
-    return {
-        'name': name,
-        'roles': [],
-        'imageUrl': None,
-    }
+    return _normalize_participant_payload(raw_participant)
 
 
 def _merge_participants(recordings):
@@ -168,7 +199,89 @@ def _merge_participants(recordings):
     return list(participants_by_name.values())
 
 
+def _participant_payload_from_room(room):
+    participants = []
+    qs = RoomParticipant.objects.filter(room=room).order_by('first_seen_at')
+    for participant in qs:
+        roles = []
+        try:
+            raw_roles = json.loads(participant.roles_json or '[]')
+            if isinstance(raw_roles, list):
+                roles = [str(role).strip() for role in raw_roles if str(role).strip()]
+        except Exception:
+            roles = []
+
+        name = (participant.name or '').strip()
+        if not name:
+            name = f"Participante {participant.client_id[:6]}"
+
+        image_url = (participant.image_url or '').strip()
+        participants.append({
+            'name': name,
+            'roles': roles,
+            'imageUrl': image_url or None,
+        })
+    return participants
+
+
+def _participants_json_from_room(room):
+    payload = _participant_payload_from_room(room)
+    if not payload:
+        return ''
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _participants_json_has_entries(participants_json):
+    text = str(participants_json or '').strip()
+    if not text:
+        return False
+    try:
+        data = json.loads(text)
+    except Exception:
+        return False
+    if not isinstance(data, list):
+        return False
+    for item in data:
+        if _normalize_participant_payload(item):
+            return True
+    return False
+
+
+def _merge_participant_payloads(primary_participants, secondary_participants):
+    participants_by_name = {}
+
+    for source in [primary_participants or [], secondary_participants or []]:
+        for raw_participant in source:
+            participant = _normalize_participant_payload(raw_participant)
+            if not participant:
+                continue
+
+            key = participant['name'].casefold()
+            current = participants_by_name.get(key)
+            if current is None:
+                participants_by_name[key] = {
+                    'name': participant['name'],
+                    'roles': list(participant.get('roles') or []),
+                    'imageUrl': participant.get('imageUrl'),
+                }
+                continue
+
+            known_roles = set(current['roles'])
+            for role in participant.get('roles') or []:
+                if role not in known_roles:
+                    current['roles'].append(role)
+                    known_roles.add(role)
+
+            if not current.get('imageUrl') and participant.get('imageUrl'):
+                current['imageUrl'] = participant['imageUrl']
+
+    return list(participants_by_name.values())
+
+
 def _recording_matches_room(recording, room):
+    if recording.room_id and str(recording.room_id) == str(room.id):
+        return True
+
     recording_room_name = (recording.room_name or '').strip().casefold()
     room_id = str(room.id).casefold()
     room_name = (room.name or '').strip().casefold()
@@ -222,14 +335,13 @@ class RomsListView(APIView):
         _sync_recordings_from_disk()
         rooms = list(_filter_rooms_queryset(request))
         all_recordings = list(Recording.objects.all().order_by('-created_at'))
-        matched_recording_ids = set()
 
         payload = []
         for room in rooms:
             room_recordings = [recording for recording in all_recordings if _recording_matches_room(recording, room)]
-            for recording in room_recordings:
-                matched_recording_ids.add(str(recording.id))
-            participants = _merge_participants(room_recordings)
+            room_participants = _participant_payload_from_room(room)
+            recording_participants = _merge_participants(room_recordings)
+            participants = _merge_participant_payloads(room_participants, recording_participants)
 
             recordings_payload = []
             atas_payload = []
@@ -273,53 +385,6 @@ class RomsListView(APIView):
                     'atas': atas_payload,
                 },
             })
-
-        if len(payload) == 1:
-            legacy_unmatched = [
-                recording
-                for recording in all_recordings
-                if str(recording.id) not in matched_recording_ids
-            ]
-            if legacy_unmatched:
-                single_room = payload[0]
-                existing_participants = single_room.get('participants') or []
-                merged = _merge_participants(legacy_unmatched)
-                if merged:
-                    participants_by_name = {str(p.get('name', '')).casefold(): p for p in existing_participants if p.get('name')}
-                    for participant in merged:
-                        participant_name = str(participant.get('name', '')).casefold()
-                        if participant_name and participant_name not in participants_by_name:
-                            existing_participants.append(participant)
-                    single_room['participants'] = existing_participants
-
-                for recording in legacy_unmatched:
-                    recording_download_url = None
-                    if recording.file:
-                        try:
-                            recording_download_url = request.build_absolute_uri(recording.file.url)
-                        except Exception:
-                            recording_download_url = recording.file.url
-
-                    duration_label = _estimate_duration_label(recording)
-                    single_room['donwloads']['recordings'].append({
-                        'id': f'rec-{recording.id}',
-                        'date': _format_datetime_iso8601(recording.created_at),
-                        'duration': duration_label,
-                        'downloadUrl': recording_download_url,
-                    })
-
-                    if recording.minutes_text or recording.minutes_generated_at or recording.minutes_status == Recording.MINUTES_DONE:
-                        ata_download_url = None
-                        try:
-                            ata_download_url = request.build_absolute_uri(f'/api/recordings/{recording.id}/minutes/')
-                        except Exception:
-                            ata_download_url = f'/api/recordings/{recording.id}/minutes/'
-                        single_room['donwloads']['atas'].append({
-                            'id': f'ata-{recording.id}',
-                            'date': _format_datetime_iso8601(recording.minutes_generated_at or recording.created_at),
-                            'duration': duration_label,
-                            'downloadUrl': ata_download_url,
-                        })
 
         return Response(payload)
 
@@ -393,11 +458,20 @@ class RecordingUploadView(APIView):
     permission_classes = (AllowAny,)
 
     def post(self, request, format=None):
-        serializer = RecordingSerializer(data=request.data)
+        room_identifier = (request.data.get('room_id') or request.data.get('room_name') or '').strip()
+        resolved_room = _resolve_room_from_identifier(room_identifier, create_if_missing=True) if room_identifier else None
+        serializer_data = request.data.copy()
+        serializer_data.pop('room_id', None)
+
+        serializer = RecordingSerializer(data=serializer_data)
         if serializer.is_valid():
-            recording = serializer.save()
+            recording = serializer.save(
+                room=resolved_room,
+                room_name=room_identifier or (str(resolved_room.id) if resolved_room else ''),
+            )
             enqueue_minutes_generation(str(recording.id))
             payload = serializer.data
+            payload['room_id'] = str(recording.room_id) if recording.room_id else None
             payload['minutes_status'] = recording.minutes_status
             payload['minutes_url'] = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/')
             return Response(payload, status=status.HTTP_201_CREATED)
@@ -412,18 +486,7 @@ class RecordingUploadView(APIView):
         always visible via this endpoint.
         """
         # --- sync disk → DB ---
-        recordings_dir = Path(settings.MEDIA_ROOT) / 'recordings'
-        recordings_dir.mkdir(parents=True, exist_ok=True)
-        known_names = set(Recording.objects.values_list('file', flat=True))
-        for fpath in sorted(recordings_dir.iterdir()):
-            if fpath.suffix.lower() not in {'.webm', '.mp4', '.mkv'}:
-                continue
-            relative = f'recordings/{fpath.name}'
-            if relative not in known_names:
-                try:
-                    Recording.objects.create(file=relative)
-                except Exception:
-                    pass  # race condition / duplicate, ignore
+        _sync_recordings_from_disk()
 
         # --- return full list ---
         qs = Recording.objects.all().order_by('-created_at')
@@ -444,6 +507,7 @@ class RecordingUploadView(APIView):
             data.append({
                 'id': str(r.id),
                 'file': r.file.name if r.file else None,
+                'room_id': str(r.room_id) if r.room_id else None,
                 'room_name': r.room_name or '',
                 'url': file_url,
                 'minutes_status': getattr(r, 'minutes_status', None),
@@ -462,7 +526,7 @@ class RecordingChunkUploadView(APIView):
     def post(self, request, format=None):
         upload_id = request.data.get('upload_id')
         filename = request.data.get('filename') or f"recording-{uuid4().hex}.webm"
-        room_name_raw = request.data.get('room_name', '')
+        room_name_raw = request.data.get('room_name') or request.data.get('room_id') or ''
         is_last = str(request.data.get('is_last', '')).lower() in {'1', 'true', 'yes'}
         chunk = request.FILES.get('chunk')
         participants_raw = request.data.get('participants', '')
@@ -488,6 +552,7 @@ class RecordingChunkUploadView(APIView):
 
         safe_name = os.path.basename(str(filename)) or f"recording-{uuid4().hex}.webm"
         room_name_value = _extract_room_name_hint(room_name_raw, safe_name, upload_id)
+        resolved_room = _resolve_room_from_identifier(room_name_value, create_if_missing=True) if room_name_value else None
         participants_json = ''
         if participants_raw:
             try:
@@ -500,7 +565,8 @@ class RecordingChunkUploadView(APIView):
         with open(temp_path, 'rb') as temp_file:
             recording = Recording.objects.create(
                 file=File(temp_file, name=safe_name),
-                room_name=room_name_value,
+                room=resolved_room,
+                room_name=room_name_value or (str(resolved_room.id) if resolved_room else ''),
                 participants_json=participants_json,
             )
 
@@ -528,6 +594,7 @@ class RecordingChunkUploadView(APIView):
         return Response({
             'id': str(recording.id),
             'file': recording.file.name if recording.file else None,
+            'room_id': str(recording.room_id) if recording.room_id else None,
             'room_name': recording.room_name or '',
             'url': file_url,
             'minutes_status': recording.minutes_status,
@@ -634,6 +701,7 @@ class RoomRecordingCompleteView(APIView):
 
     def post(self, request):
         room_name = (request.data.get('room_name') or '').strip()
+        room_obj = _resolve_room_from_identifier(room_name, create_if_missing=True) if room_name else None
         recording_payload = request.data.get('recording') or {}
         if not room_name:
             return Response({'error': 'room_name é obrigatório'}, status=status.HTTP_400_BAD_REQUEST)
@@ -649,7 +717,26 @@ class RoomRecordingCompleteView(APIView):
         recording_id = (recording_payload.get('id') or '').strip()
         if recording_id:
             try:
-                Recording.objects.filter(id=recording_id, room_name='').update(room_name=room_name)
+                recording = Recording.objects.filter(id=recording_id).first()
+                if recording is not None:
+                    changed_fields = []
+                    if room_obj is not None and recording.room_id != room_obj.id:
+                        recording.room = room_obj
+                        changed_fields.append('room')
+
+                    canonical_room_name = str(room_obj.id) if room_obj is not None else room_name
+                    if recording.room_name != canonical_room_name:
+                        recording.room_name = canonical_room_name
+                        changed_fields.append('room_name')
+
+                    if room_obj is not None and not _participants_json_has_entries(recording.participants_json):
+                        participants_json = _participants_json_from_room(room_obj)
+                        if participants_json:
+                            recording.participants_json = participants_json
+                            changed_fields.append('participants_json')
+
+                    if changed_fields:
+                        recording.save(update_fields=changed_fields)
             except Exception:
                 pass
 

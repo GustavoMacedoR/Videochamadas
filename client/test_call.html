@@ -333,7 +333,7 @@
         document.getElementById('raiseHandBtn').classList.remove('raised');
         renderHandQueue();
         // announce ourselves to the room so existing peers will create offers
-        sendMessage({type: 'join', client_id: clientId});
+        sendMessage({type: 'join', client_id: clientId, name: _chatName});
       };
       ws.onclose = () => { console.log('WS closed'); document.getElementById('status').textContent = 'WS: closed'; };
       ws.onerror = (e) => { console.error('WS error', e); document.getElementById('status').textContent = 'WS: error'; };

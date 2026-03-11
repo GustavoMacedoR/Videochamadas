@@ -24,6 +24,7 @@ class Recording(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    room = models.ForeignKey('Room', on_delete=models.SET_NULL, null=True, blank=True, related_name='recordings')
     file = models.FileField(upload_to='recordings/')
     room_name = models.CharField(max_length=200, blank=True, default='')
     participants_json = models.TextField(blank=True, default='')
@@ -35,6 +36,25 @@ class Recording(models.Model):
 
     def __str__(self):
         return str(self.file.name)
+
+
+class RoomParticipant(models.Model):
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='participants')
+    client_id = models.CharField(max_length=40)
+    name = models.CharField(max_length=80, blank=True, default='')
+    roles_json = models.TextField(blank=True, default='[]')
+    image_url = models.URLField(max_length=500, blank=True, default='')
+    join_count = models.PositiveIntegerField(default=1)
+    first_seen_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['room', 'client_id'], name='unique_room_participant_client'),
+        ]
+
+    def __str__(self):
+        return f"{self.room_id}:{self.client_id}"
 
 
 class RoomRecordingState(models.Model):

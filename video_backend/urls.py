@@ -14,10 +14,8 @@ urlpatterns = [
     # Helpful shortcuts to open the test client directly
     path('call/', lambda request: redirect('/client/test_call.html')),
     path('call/<str:room>/', lambda request, room: redirect(f'/client/test_call.html?room={room}')),
+    # Serve media files for both direct path and proxy-stripped path.
+    # In some deployments, /video is removed by reverse proxy before reaching Django.
+    re_path(r'^video/media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+    re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]
-
-# Serve media files during development when DEBUG=True
-if settings.DEBUG:
-    urlpatterns += [
-        re_path(r'^video/media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
-    ]

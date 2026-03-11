@@ -111,6 +111,8 @@ Resposta típica:
 #### 3.1.0 `GET /api/roms/`
 Retorna salas no formato usado pelo cliente de histórico/downloads.
 
+`participants` é alimentado por participantes que entraram na call via WebSocket (`join/chat/raise_hand/lower_hand`) e também por metadados das gravações da própria sala.
+
 Query params opcionais (mesmos filtros de `rooms`):
 - `name`: filtro `icontains` no nome.
 - `id`: filtro `icontains` no UUID.
@@ -345,6 +347,7 @@ Upload simples de gravação (multipart).
 
 Campos multipart:
 - `file` (obrigatório)
+- `room_id` (opcional; UUID da sala, prioridade sobre `room_name`)
 - `room_name` (opcional; identificador da sala para vincular a gravação)
 - `participants_json` (opcional, string JSON)
 
@@ -401,6 +404,7 @@ Upload em partes (chunked upload).
 Campos multipart:
 - `upload_id` (obrigatório)
 - `filename` (opcional; padrão `recording-<uuid>.webm`)
+- `room_id` (opcional; UUID da sala, prioridade sobre `room_name`)
 - `room_name` (opcional; recomendado para vincular corretamente à sala no histórico)
 - `is_last` (opcional: `1|true|yes` para finalizar)
 - `chunk` (arquivo; obrigatório nas partes intermediárias)

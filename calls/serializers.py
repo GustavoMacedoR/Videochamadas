@@ -10,11 +10,14 @@ class RoomSerializer(serializers.ModelSerializer):
 
 
 class RecordingSerializer(serializers.ModelSerializer):
+    room_id = serializers.UUIDField(source='room_id', read_only=True)
+
     class Meta:
         model = Recording
         fields = [
             'id',
             'file',
+            'room_id',
             'room_name',
             'participants_json',
             'minutes_status',

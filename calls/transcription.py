@@ -41,7 +41,17 @@ def _parse_participants(participants_json):
     except Exception:
         return []
     if isinstance(data, list):
-        return [str(item).strip() for item in data if str(item).strip()]
+        participants = []
+        for item in data:
+            if isinstance(item, dict):
+                name = str(item.get('name') or '').strip()
+                if name:
+                    participants.append(name)
+                continue
+            name = str(item).strip()
+            if name:
+                participants.append(name)
+        return participants
     return []
 
 

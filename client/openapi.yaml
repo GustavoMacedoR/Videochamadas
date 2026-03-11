@@ -428,6 +428,11 @@ paths:
                 file:
                   type: string
                   format: binary
+                room_id:
+                  type: string
+                  format: uuid
+                  description: UUID da sala para vincular a gravação
+                  example: 203c13ed-4f61-448f-b326-f947f6644fe0
                 room_name:
                   type: string
                   description: Identificador da sala para vincular a gravação no histórico
@@ -470,6 +475,11 @@ paths:
                 filename:
                   type: string
                   example: sala-1.webm
+                room_id:
+                  type: string
+                  format: uuid
+                  description: UUID da sala para vincular a gravação
+                  example: 203c13ed-4f61-448f-b326-f947f6644fe0
                 room_name:
                   type: string
                   description: Identificador da sala para vincular a gravação no histórico
@@ -821,6 +831,10 @@ components:
         file:
           type: string
           description: URL/arquivo retornado pelo serializer
+        room_id:
+          type: string
+          format: uuid
+          nullable: true
         room_name:
           type: string
         participants_json:
@@ -845,6 +859,7 @@ components:
       required:
         - id
         - file
+        - room_id
         - room_name
         - participants_json
         - minutes_status
@@ -861,6 +876,10 @@ components:
           format: uuid
         file:
           type: string
+          nullable: true
+        room_id:
+          type: string
+          format: uuid
           nullable: true
         room_name:
           type: string
