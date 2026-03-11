@@ -428,6 +428,10 @@ paths:
                 file:
                   type: string
                   format: binary
+                room_name:
+                  type: string
+                  description: Identificador da sala para vincular a gravação no histórico
+                  example: sala-1a2b3c
                 participants_json:
                   type: string
                   description: JSON serializado com lista de participantes
@@ -466,6 +470,10 @@ paths:
                 filename:
                   type: string
                   example: sala-1.webm
+                room_name:
+                  type: string
+                  description: Identificador da sala para vincular a gravação no histórico
+                  example: sala-1a2b3c
                 is_last:
                   type: string
                   description: Aceita 1|true|yes para finalizar upload
@@ -813,6 +821,8 @@ components:
         file:
           type: string
           description: URL/arquivo retornado pelo serializer
+        room_name:
+          type: string
         participants_json:
           type: string
         minutes_status:
@@ -835,6 +845,7 @@ components:
       required:
         - id
         - file
+        - room_name
         - participants_json
         - minutes_status
         - minutes_text
@@ -851,6 +862,8 @@ components:
         file:
           type: string
           nullable: true
+        room_name:
+          type: string
         url:
           type: string
           format: uri

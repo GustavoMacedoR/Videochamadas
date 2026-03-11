@@ -45,13 +45,14 @@ async function postComplete(payload) {
     await page.click('#connectBtn');
     await page.waitForTimeout(5000);
 
-    await page.evaluate(async ({ apiBase, uploadId, fileName, participants }) => {
+    await page.evaluate(async ({ apiBase, uploadId, fileName, participants, roomName }) => {
     window.__serverUploadPromises = [];
 
     window.__serverPostChunk = async (chunkBlob, isLast) => {
       const fd = new FormData();
       fd.append('upload_id', uploadId);
       fd.append('filename', fileName);
+      fd.append('room_name', roomName || '');
       fd.append('is_last', isLast ? '1' : '0');
       if (isLast) fd.append('participants', participants || '[]');
       if (chunkBlob) fd.append('chunk', chunkBlob, fileName);
@@ -92,6 +93,7 @@ async function postComplete(payload) {
     uploadId: UPLOAD_ID,
     fileName: FILE_NAME,
     participants: PARTICIPANTS,
+    roomName: ROOM_NAME,
     });
 
     const finalizeAndExit = async () => {

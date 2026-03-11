@@ -15,6 +15,7 @@ class RecordingSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'file',
+            'room_name',
             'participants_json',
             'minutes_status',
             'minutes_text',

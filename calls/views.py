@@ -23,6 +23,8 @@ from .server_recording import start_server_recording, stop_server_recording, get
 
 
 MINUTES_RANGE_PATTERN = re.compile(r'\[(\d{2}:\d{2}:\d{2})-(\d{2}:\d{2}:\d{2})\]')
+ROOM_SUFFIX_FILE_PATTERN = re.compile(r'^(?P<room>.+)-\d{8}-\d{6}\.(webm|mp4|mkv)$', re.IGNORECASE)
+ROOM_SUFFIX_UPLOAD_PATTERN = re.compile(r'^(?P<room>.+)-[0-9a-f]{32}$', re.IGNORECASE)
 
 
 def _filter_rooms_queryset(request):
@@ -54,6 +56,39 @@ def _format_datetime_iso8601(value):
         return formatted
     except Exception:
         return str(value)
+
+
+def _sync_recordings_from_disk():
+    recordings_dir = Path(settings.MEDIA_ROOT) / 'recordings'
+    recordings_dir.mkdir(parents=True, exist_ok=True)
+    known_names = set(Recording.objects.values_list('file', flat=True))
+    for fpath in sorted(recordings_dir.iterdir()):
+        if fpath.suffix.lower() not in {'.webm', '.mp4', '.mkv'}:
+            continue
+        relative = f'recordings/{fpath.name}'
+        if relative not in known_names:
+            try:
+                Recording.objects.create(file=relative, room_name='')
+            except Exception:
+                pass
+
+
+def _extract_room_name_hint(room_name, filename, upload_id):
+    clean_room_name = str(room_name or '').strip()
+    if clean_room_name:
+        return clean_room_name
+
+    file_name = os.path.basename(str(filename or '').strip())
+    file_match = ROOM_SUFFIX_FILE_PATTERN.match(file_name)
+    if file_match:
+        return str(file_match.group('room') or '').strip()
+
+    upload_value = str(upload_id or '').strip()
+    upload_match = ROOM_SUFFIX_UPLOAD_PATTERN.match(upload_value)
+    if upload_match:
+        return str(upload_match.group('room') or '').strip()
+
+    return ''
 
 
 def _parse_recording_participants(recording):
@@ -134,15 +169,22 @@ def _merge_participants(recordings):
 
 
 def _recording_matches_room(recording, room):
+    recording_room_name = (recording.room_name or '').strip().casefold()
+    room_id = str(room.id).casefold()
+    room_name = (room.name or '').strip().casefold()
+
+    if recording_room_name:
+        if recording_room_name == room_id:
+            return True
+        if room_name and recording_room_name == room_name:
+            return True
+
     if not recording.file:
         return False
 
     file_name = (recording.file.name or '').strip().casefold()
     if not file_name:
         return False
-
-    room_id = str(room.id).casefold()
-    room_name = (room.name or '').strip().casefold()
 
     if room_id and room_id in file_name:
         return True
@@ -177,12 +219,16 @@ class RomsListView(APIView):
     permission_classes = (AllowAny,)
 
     def get(self, request):
+        _sync_recordings_from_disk()
         rooms = list(_filter_rooms_queryset(request))
         all_recordings = list(Recording.objects.all().order_by('-created_at'))
+        matched_recording_ids = set()
 
         payload = []
         for room in rooms:
             room_recordings = [recording for recording in all_recordings if _recording_matches_room(recording, room)]
+            for recording in room_recordings:
+                matched_recording_ids.add(str(recording.id))
             participants = _merge_participants(room_recordings)
 
             recordings_payload = []
@@ -205,11 +251,16 @@ class RomsListView(APIView):
                 })
 
                 if recording.minutes_text or recording.minutes_generated_at or recording.minutes_status == Recording.MINUTES_DONE:
+                    ata_download_url = None
+                    try:
+                        ata_download_url = request.build_absolute_uri(f'/api/recordings/{recording.id}/minutes/')
+                    except Exception:
+                        ata_download_url = f'/api/recordings/{recording.id}/minutes/'
                     atas_payload.append({
                         'id': f'ata-{recording.id}',
                         'date': _format_datetime_iso8601(recording.minutes_generated_at or recording.created_at),
                         'duration': duration_label,
-                        'downloadUrl': request.build_absolute_uri(f'/api/recordings/{recording.id}/minutes/'),
+                        'downloadUrl': ata_download_url,
                     })
 
             payload.append({
@@ -222,6 +273,53 @@ class RomsListView(APIView):
                     'atas': atas_payload,
                 },
             })
+
+        if len(payload) == 1:
+            legacy_unmatched = [
+                recording
+                for recording in all_recordings
+                if str(recording.id) not in matched_recording_ids
+            ]
+            if legacy_unmatched:
+                single_room = payload[0]
+                existing_participants = single_room.get('participants') or []
+                merged = _merge_participants(legacy_unmatched)
+                if merged:
+                    participants_by_name = {str(p.get('name', '')).casefold(): p for p in existing_participants if p.get('name')}
+                    for participant in merged:
+                        participant_name = str(participant.get('name', '')).casefold()
+                        if participant_name and participant_name not in participants_by_name:
+                            existing_participants.append(participant)
+                    single_room['participants'] = existing_participants
+
+                for recording in legacy_unmatched:
+                    recording_download_url = None
+                    if recording.file:
+                        try:
+                            recording_download_url = request.build_absolute_uri(recording.file.url)
+                        except Exception:
+                            recording_download_url = recording.file.url
+
+                    duration_label = _estimate_duration_label(recording)
+                    single_room['donwloads']['recordings'].append({
+                        'id': f'rec-{recording.id}',
+                        'date': _format_datetime_iso8601(recording.created_at),
+                        'duration': duration_label,
+                        'downloadUrl': recording_download_url,
+                    })
+
+                    if recording.minutes_text or recording.minutes_generated_at or recording.minutes_status == Recording.MINUTES_DONE:
+                        ata_download_url = None
+                        try:
+                            ata_download_url = request.build_absolute_uri(f'/api/recordings/{recording.id}/minutes/')
+                        except Exception:
+                            ata_download_url = f'/api/recordings/{recording.id}/minutes/'
+                        single_room['donwloads']['atas'].append({
+                            'id': f'ata-{recording.id}',
+                            'date': _format_datetime_iso8601(recording.minutes_generated_at or recording.created_at),
+                            'duration': duration_label,
+                            'downloadUrl': ata_download_url,
+                        })
 
         return Response(payload)
 
@@ -346,6 +444,7 @@ class RecordingUploadView(APIView):
             data.append({
                 'id': str(r.id),
                 'file': r.file.name if r.file else None,
+                'room_name': r.room_name or '',
                 'url': file_url,
                 'minutes_status': getattr(r, 'minutes_status', None),
                 'minutes_url': minutes_url,
@@ -363,6 +462,7 @@ class RecordingChunkUploadView(APIView):
     def post(self, request, format=None):
         upload_id = request.data.get('upload_id')
         filename = request.data.get('filename') or f"recording-{uuid4().hex}.webm"
+        room_name_raw = request.data.get('room_name', '')
         is_last = str(request.data.get('is_last', '')).lower() in {'1', 'true', 'yes'}
         chunk = request.FILES.get('chunk')
         participants_raw = request.data.get('participants', '')
@@ -387,17 +487,22 @@ class RecordingChunkUploadView(APIView):
             return Response({'error': 'nenhum dado recebido para finalizar upload'}, status=status.HTTP_400_BAD_REQUEST)
 
         safe_name = os.path.basename(str(filename)) or f"recording-{uuid4().hex}.webm"
+        room_name_value = _extract_room_name_hint(room_name_raw, safe_name, upload_id)
         participants_json = ''
         if participants_raw:
             try:
                 parsed = json.loads(participants_raw)
                 if isinstance(parsed, list):
-                    participants_json = json.dumps([str(item) for item in parsed])
+                    participants_json = json.dumps(parsed)
             except Exception:
                 participants_json = ''
 
         with open(temp_path, 'rb') as temp_file:
-            recording = Recording.objects.create(file=File(temp_file, name=safe_name), participants_json=participants_json)
+            recording = Recording.objects.create(
+                file=File(temp_file, name=safe_name),
+                room_name=room_name_value,
+                participants_json=participants_json,
+            )
 
         try:
             if temp_path.exists():
@@ -423,6 +528,7 @@ class RecordingChunkUploadView(APIView):
         return Response({
             'id': str(recording.id),
             'file': recording.file.name if recording.file else None,
+            'room_name': recording.room_name or '',
             'url': file_url,
             'minutes_status': recording.minutes_status,
             'minutes_url': minutes_url,
@@ -539,6 +645,13 @@ class RoomRecordingCompleteView(APIView):
                 'error': recording_payload.get('error'),
             })
             return Response({'ok': True})
+
+        recording_id = (recording_payload.get('id') or '').strip()
+        if recording_id:
+            try:
+                Recording.objects.filter(id=recording_id, room_name='').update(room_name=room_name)
+            except Exception:
+                pass
 
         notify_recording_ready(room_name, recording_payload)
         return Response({'ok': True})

@@ -345,6 +345,7 @@ Upload simples de gravação (multipart).
 
 Campos multipart:
 - `file` (obrigatório)
+- `room_name` (opcional; identificador da sala para vincular a gravação)
 - `participants_json` (opcional, string JSON)
 
 ```bash
@@ -400,6 +401,7 @@ Upload em partes (chunked upload).
 Campos multipart:
 - `upload_id` (obrigatório)
 - `filename` (opcional; padrão `recording-<uuid>.webm`)
+- `room_name` (opcional; recomendado para vincular corretamente à sala no histórico)
 - `is_last` (opcional: `1|true|yes` para finalizar)
 - `chunk` (arquivo; obrigatório nas partes intermediárias)
 - `participants` (opcional; JSON array em string, usado na finalização)

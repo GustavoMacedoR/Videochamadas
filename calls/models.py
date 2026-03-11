@@ -25,6 +25,7 @@ class Recording(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     file = models.FileField(upload_to='recordings/')
+    room_name = models.CharField(max_length=200, blank=True, default='')
     participants_json = models.TextField(blank=True, default='')
     minutes_status = models.CharField(max_length=20, choices=MINUTES_STATUS_CHOICES, default=MINUTES_PENDING)
     minutes_text = models.TextField(blank=True, default='')
