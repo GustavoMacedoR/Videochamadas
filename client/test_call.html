@@ -122,6 +122,7 @@
     let roomRecordingActive = false;
     let roomRecordingOwner = '';
     let _recordingPollTimer = null;
+    let _lastReadyRecordingId = '';
     // Chat
     let _chatName = '';
     const _chatMessages = []; // keep a brief in-memory log for the session
@@ -251,6 +252,33 @@
       }
     }
 
+    function normalizeRoomKey(value){
+      return String(value || '').trim().toLowerCase();
+    }
+
+    function recordingBelongsToRoom(item, roomName){
+      if(!item) return false;
+      const roomKey = normalizeRoomKey(roomName);
+      if(!roomKey) return false;
+      const roomId = normalizeRoomKey(item.room_id);
+      const roomAlias = normalizeRoomKey(item.room_name);
+      return roomId === roomKey || roomAlias === roomKey;
+    }
+
+    function normalizeServerUrl(url){
+      if(!url) return '';
+      try{
+        const parsed = new URL(url, location.origin);
+        const host = (parsed.hostname || '').toLowerCase();
+        if(['127.0.0.1', 'localhost', '0.0.0.0'].includes(host) && parsed.origin !== location.origin){
+          return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+        }
+        return parsed.href;
+      }catch(_){
+        return String(url);
+      }
+    }
+
     function startRecordingResultPolling(roomName){
       if(_recordingPollTimer) clearTimeout(_recordingPollTimer);
       const MAX_ATTEMPTS = 20;
@@ -259,7 +287,7 @@
       // Store the moment we started polling so we can look for recordings created around that time
       const pollStartTs = Date.now();
 
-      const recordingsListUrl = `${BACKEND_API_BASE}/recordings/`;
+      const recordingsListUrl = `${BACKEND_API_BASE}/recordings/?room_id=${encodeURIComponent(roomName || '')}`;
 
       const poll = async () => {
         attempts += 1;
@@ -269,16 +297,22 @@
           const res = await fetch(recordingsListUrl);
           const list = await res.json().catch(() => ([]));
           if(res.ok && Array.isArray(list) && list.length){
-            // Look for any recording created at or after we stopped (with 90s tolerance for clock skew / server delay)
-            const cutoff = pollStartTs - 90000;
+            // Look for a recording from the same room created around/after stop
+            const cutoff = pollStartTs - 20000;
             const found = list.find(item => {
               if(!item) return false;
+              if(!recordingBelongsToRoom(item, roomName)) return false;
+              const itemId = String(item.id || '').trim();
+              if(itemId && itemId === _lastReadyRecordingId) return false;
               const createdAt = item.created_at ? new Date(item.created_at).getTime() : 0;
-              return createdAt >= cutoff;
+              return createdAt > 0 && createdAt >= cutoff;
             });
             if(found){
-              const videoLink = found.url
-                ? `<a href="${found.url}" target="_blank" rel="noopener">▶ ver gravação</a>`
+              const foundId = String(found.id || '').trim();
+              if(foundId) _lastReadyRecordingId = foundId;
+              const normalizedVideoUrl = normalizeServerUrl(found.url);
+              const videoLink = normalizedVideoUrl
+                ? `<a href="${normalizedVideoUrl}" target="_blank" rel="noopener">▶ ver gravação</a>`
                 : (found.file ? `arquivo: ${found.file}` : 'link de gravação indisponível');
               document.getElementById('recordStatus').innerHTML = `✅ Arquivo pronto! ${videoLink}`;
               return;
@@ -294,7 +328,7 @@
           // Timeout — show direct link so user can check manually
           document.getElementById('recordStatus').innerHTML =
             `⚠️ Arquivo não detectado automaticamente. ` +
-            `<a href="${recordingsListUrl}" target="_blank" rel="noopener">Verificar gravações</a> ` +
+            `<a href="${recordingsListUrl}" target="_blank" rel="noopener">Verificar gravações da sala</a> ` +
             `(pode demorar alguns instantes após o processamento no servidor).`;
         }
       };
@@ -428,8 +462,12 @@
             document.getElementById('recordStatus').textContent = 'Falha na gravação do servidor: ' + rec.error;
             return;
           }
-          const videoLink = rec.url ? `<a href="${rec.url}" target="_blank" rel="noopener">ver gravação</a>` : 'link de gravação indisponível';
-          const minutesLink = rec.minutes_url ? `<a href="${rec.minutes_url}" target="_blank" rel="noopener">ver ata</a>` : 'ata ainda em processamento';
+          const recId = String(rec.id || '').trim();
+          if(recId) _lastReadyRecordingId = recId;
+          const normalizedVideoUrl = normalizeServerUrl(rec.url);
+          const normalizedMinutesUrl = normalizeServerUrl(rec.minutes_url);
+          const videoLink = normalizedVideoUrl ? `<a href="${normalizedVideoUrl}" target="_blank" rel="noopener">ver gravação</a>` : 'link de gravação indisponível';
+          const minutesLink = normalizedMinutesUrl ? `<a href="${normalizedMinutesUrl}" target="_blank" rel="noopener">ver ata</a>` : 'ata ainda em processamento';
           document.getElementById('recordStatus').innerHTML = `Arquivo pronto: ${videoLink} | ${minutesLink}`;
         }
       };

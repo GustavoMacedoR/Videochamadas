@@ -10,8 +10,10 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.core.files.base import File
+from django.db.models import Q
 from datetime import timezone as datetime_timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 import os
 import json
@@ -42,6 +44,52 @@ def _filter_rooms_queryset(request):
         except (ValueError, TypeError):
             pass
     return qs
+
+
+def _filter_recordings_queryset(request):
+    qs = Recording.objects.all().order_by('-created_at')
+    if request is None:
+        return qs
+
+    room_value = str(request.query_params.get('room_id') or request.query_params.get('room_name') or '').strip()
+    if not room_value:
+        return qs
+
+    room_obj = _resolve_room_from_identifier(room_value, create_if_missing=False)
+    if room_obj is None:
+        return qs.filter(room_name__iexact=room_value)
+
+    room_id_text = str(room_obj.id)
+    room_name_text = (room_obj.name or '').strip()
+
+    room_name_filters = Q(room_name__iexact=room_id_text)
+    if room_name_text:
+        room_name_filters |= Q(room_name__iexact=room_name_text)
+
+    return qs.filter(Q(room=room_obj) | room_name_filters)
+
+
+def _normalize_relative_client_url(raw_url):
+    value = str(raw_url or '').strip()
+    if not value:
+        return ''
+    if value.startswith('/'):
+        return value
+
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return value
+
+    if not parsed.scheme and not parsed.netloc:
+        return value
+
+    path = parsed.path or ''
+    if parsed.query:
+        path = f'{path}?{parsed.query}'
+    if parsed.fragment:
+        path = f'{path}#{parsed.fragment}'
+    return path or value
 
 
 def _format_datetime_iso8601(value):
@@ -514,7 +562,7 @@ class RecordingUploadView(APIView):
         _sync_recordings_from_disk()
 
         # --- return full list ---
-        qs = Recording.objects.all().order_by('-created_at')
+        qs = _filter_recordings_queryset(request)
         data = []
         for r in qs:
             file_url = r.file.url if r.file else None
@@ -739,6 +787,7 @@ class RoomRecordingCompleteView(APIView):
             })
             return Response({'ok': True})
 
+        recording = None
         recording_id = (recording_payload.get('id') or '').strip()
         if recording_id:
             try:
@@ -763,7 +812,37 @@ class RoomRecordingCompleteView(APIView):
                     if changed_fields:
                         recording.save(update_fields=changed_fields)
             except Exception:
-                pass
+                recording = None
 
-        notify_recording_ready(room_name, recording_payload)
+        resolved_payload = dict(recording_payload)
+        if recording is not None:
+            recording_url = ''
+            if recording.file:
+                try:
+                    recording_url = recording.file.url
+                except Exception:
+                    recording_url = ''
+
+            resolved_payload = {
+                'id': str(recording.id),
+                'file': recording.file.name if recording.file else None,
+                'room_id': str(recording.room_id) if recording.room_id else None,
+                'room_name': recording.room_name or room_name,
+                'url': recording_url,
+                'minutes_status': recording.minutes_status,
+                'minutes_url': f'/video/api/recordings/{recording.id}/minutes/',
+                'minutes_generated_at': recording.minutes_generated_at,
+                'created_at': recording.created_at,
+            }
+
+        resolved_payload['url'] = _normalize_relative_client_url(resolved_payload.get('url'))
+        default_minutes_url = ''
+        resolved_recording_id = resolved_payload.get('id')
+        if resolved_recording_id:
+            default_minutes_url = f'/video/api/recordings/{resolved_recording_id}/minutes/'
+        resolved_payload['minutes_url'] = _normalize_relative_client_url(
+            resolved_payload.get('minutes_url') or default_minutes_url
+        )
+
+        notify_recording_ready(room_name, resolved_payload)
         return Response({'ok': True})
