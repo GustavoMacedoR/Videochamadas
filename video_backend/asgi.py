@@ -5,9 +5,11 @@ from channels.routing import ProtocolTypeRouter, URLRouter
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'video_backend.settings')
 
-import calls.routing
+django_asgi_app = get_asgi_application()
+
+from calls.routing import websocket_urlpatterns
 
 application = ProtocolTypeRouter({
-    'http': get_asgi_application(),
-    'websocket': URLRouter(calls.routing.websocket_urlpatterns),
+    'http': django_asgi_app,
+    'websocket': URLRouter(websocket_urlpatterns),
 })
