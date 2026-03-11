@@ -29,8 +29,7 @@ class CallConsumer(AsyncWebsocketConsumer):
 
         msg_type = data.get('type')
 
-        if msg_type in {'join', 'chat', 'raise_hand', 'lower_hand'}:
-            await self._register_participant_from_payload(data, increment_join=(msg_type == 'join'))
+        await self._register_participant_from_payload(data, increment_join=(msg_type == 'join'))
 
         if msg_type == 'chat':
             # Only relay name + message; discard any other fields for safety

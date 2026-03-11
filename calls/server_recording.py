@@ -47,7 +47,7 @@ def _build_api_base():
     api_base = os.environ.get('SERVER_API_BASE_URL')
     if api_base:
         return api_base.rstrip('/')
-    return 'http://127.0.0.1:8000/video/api'
+    return 'http://127.0.0.1:8000/api'
 
 
 def _is_pid_alive(pid):

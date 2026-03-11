@@ -93,14 +93,23 @@ def _normalize_roles(raw_roles):
 
 def _normalize_participant_payload(raw_participant):
     if isinstance(raw_participant, dict):
+        client_id = raw_participant.get('clientId')
+        if client_id is None:
+            client_id = raw_participant.get('client_id')
+        client_id = str(client_id or '').strip()[:40] or None
+
         name = str(raw_participant.get('name', '')).strip()
-        if not name:
+        if not name and not client_id:
             return None
+        if not name:
+            name = f"Participante {client_id[:6]}" if client_id else 'Participante'
+
         image_url = raw_participant.get('imageUrl')
         if image_url is None:
             image_url = raw_participant.get('image_url')
         image_url = str(image_url).strip() if image_url else None
         return {
+            'clientId': client_id,
             'name': name,
             'roles': _normalize_roles(raw_participant.get('roles')),
             'imageUrl': image_url,
@@ -110,6 +119,7 @@ def _normalize_participant_payload(raw_participant):
     if not name:
         return None
     return {
+        'clientId': None,
         'name': name,
         'roles': [],
         'imageUrl': None,
@@ -173,7 +183,7 @@ def _normalize_participant(raw_participant):
 
 
 def _merge_participants(recordings):
-    participants_by_name = {}
+    participants_by_identity = {}
 
     for recording in recordings:
         for participant in _parse_recording_participants(recording):
@@ -181,10 +191,15 @@ def _merge_participants(recordings):
             if not normalized:
                 continue
 
-            participant_key = normalized['name'].casefold()
-            current = participants_by_name.get(participant_key)
+            participant_key = normalized.get('clientId') or normalized['name'].casefold()
+            current = participants_by_identity.get(participant_key)
             if current is None:
-                participants_by_name[participant_key] = normalized
+                participants_by_identity[participant_key] = {
+                    'clientId': normalized.get('clientId'),
+                    'name': normalized['name'],
+                    'roles': list(normalized.get('roles') or []),
+                    'imageUrl': normalized.get('imageUrl'),
+                }
                 continue
 
             current_roles = set(current['roles'])
@@ -196,7 +211,7 @@ def _merge_participants(recordings):
             if not current.get('imageUrl') and normalized.get('imageUrl'):
                 current['imageUrl'] = normalized['imageUrl']
 
-    return list(participants_by_name.values())
+    return list(participants_by_identity.values())
 
 
 def _participant_payload_from_room(room):
@@ -217,6 +232,7 @@ def _participant_payload_from_room(room):
 
         image_url = (participant.image_url or '').strip()
         participants.append({
+            'clientId': participant.client_id,
             'name': name,
             'roles': roles,
             'imageUrl': image_url or None,
@@ -248,7 +264,7 @@ def _participants_json_has_entries(participants_json):
 
 
 def _merge_participant_payloads(primary_participants, secondary_participants):
-    participants_by_name = {}
+    participants_by_identity = {}
 
     for source in [primary_participants or [], secondary_participants or []]:
         for raw_participant in source:
@@ -256,10 +272,12 @@ def _merge_participant_payloads(primary_participants, secondary_participants):
             if not participant:
                 continue
 
-            key = participant['name'].casefold()
-            current = participants_by_name.get(key)
+            client_id = participant.get('clientId')
+            key = f"id:{client_id.casefold()}" if client_id else f"name:{participant['name'].casefold()}"
+            current = participants_by_identity.get(key)
             if current is None:
-                participants_by_name[key] = {
+                participants_by_identity[key] = {
+                    'clientId': client_id,
                     'name': participant['name'],
                     'roles': list(participant.get('roles') or []),
                     'imageUrl': participant.get('imageUrl'),
@@ -275,7 +293,14 @@ def _merge_participant_payloads(primary_participants, secondary_participants):
             if not current.get('imageUrl') and participant.get('imageUrl'):
                 current['imageUrl'] = participant['imageUrl']
 
-    return list(participants_by_name.values())
+    payload = []
+    for participant in participants_by_identity.values():
+        payload.append({
+            'name': participant['name'],
+            'roles': list(participant.get('roles') or []),
+            'imageUrl': participant.get('imageUrl'),
+        })
+    return payload
 
 
 def _recording_matches_room(recording, room):
