@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import math
@@ -11,6 +12,7 @@ from uuid import UUID, uuid4
 from django.conf import settings
 from django.core.files.base import File
 from django.db.models import Q
+from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import viewsets, status
@@ -759,6 +761,13 @@ class RecordingMinutesView(APIView):
             except Exception:
                 pass
 
+        pdf_url = None
+        if recording.minutes_status == Recording.MINUTES_DONE and recording.minutes_text:
+            try:
+                pdf_url = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/pdf/')
+            except Exception:
+                pdf_url = f'/video/api/recordings/{recording.id}/minutes/pdf/'
+
         return Response({
             'id': str(recording.id),
             'recording_url': file_url,
@@ -766,7 +775,139 @@ class RecordingMinutesView(APIView):
             'minutes_generated_at': recording.minutes_generated_at,
             'minutes_error': recording.minutes_error,
             'minutes_text': recording.minutes_text,
+            'pdf_url': pdf_url,
         })
+
+
+def _render_minutes_pdf(recording):
+    """Generate a formatted PDF from the minutes_text of a Recording."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=2 * cm,
+        rightMargin=2 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+    )
+
+    styles = getSampleStyleSheet()
+    style_title = ParagraphStyle(
+        'AtaTitle', parent=styles['Heading1'],
+        fontSize=18, alignment=TA_CENTER, spaceAfter=12,
+        textColor=HexColor('#1a1a1a'),
+    )
+    style_heading = ParagraphStyle(
+        'AtaHeading', parent=styles['Heading2'],
+        fontSize=13, spaceBefore=14, spaceAfter=6,
+        textColor=HexColor('#333333'),
+    )
+    style_meta = ParagraphStyle(
+        'AtaMeta', parent=styles['Normal'],
+        fontSize=10, leading=14, textColor=HexColor('#555555'),
+    )
+    style_body = ParagraphStyle(
+        'AtaBody', parent=styles['Normal'],
+        fontSize=10, leading=14, textColor=HexColor('#222222'),
+    )
+    style_speaker = ParagraphStyle(
+        'AtaSpeaker', parent=styles['Normal'],
+        fontSize=10, leading=14, leftIndent=0.5 * cm,
+        textColor=HexColor('#222222'),
+    )
+
+    text = recording.minutes_text or ''
+    elements = []
+
+    from django.utils import timezone as dj_tz
+    created_at = ''
+    if recording.created_at:
+        created_at = dj_tz.localtime(recording.created_at).strftime('%d/%m/%Y %H:%M')
+
+    # Parse the markdown-ish minutes text into structured PDF elements
+    lines = text.split('\n')
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            elements.append(Spacer(1, 6))
+            continue
+
+        if stripped.startswith('# '):
+            elements.append(Paragraph(stripped[2:].strip(), style_title))
+            elements.append(Spacer(1, 4))
+            elements.append(HRFlowable(width='100%', thickness=1, color=HexColor('#cccccc')))
+            elements.append(Spacer(1, 8))
+        elif stripped.startswith('## '):
+            elements.append(Spacer(1, 6))
+            elements.append(Paragraph(stripped[3:].strip(), style_heading))
+        elif stripped.startswith('- ['):
+            # Transcript line: - [HH:MM:SS-HH:MM:SS] Speaker: text
+            content = stripped[2:].strip()
+            # Bold the timestamp and speaker
+            match = re.match(r'(\[.*?\])\s*(.*?):\s*(.*)', content)
+            if match:
+                ts, speaker, speech = match.group(1), match.group(2), match.group(3)
+                formatted = f'<font color="#888888">{ts}</font> <b>{speaker}:</b> {speech}'
+                elements.append(Paragraph(formatted, style_speaker))
+            else:
+                elements.append(Paragraph(content, style_speaker))
+        elif stripped.startswith('- '):
+            content = stripped[2:].strip()
+            # Meta lines (Gravação:, Data/hora:, Participantes:)
+            if ':' in content:
+                label, value = content.split(':', 1)
+                formatted = f'<b>{label}:</b>{value}'
+                elements.append(Paragraph(formatted, style_meta))
+            else:
+                elements.append(Paragraph(f'• {content}', style_body))
+        elif stripped.startswith('_') and stripped.endswith('_'):
+            elements.append(Spacer(1, 8))
+            elements.append(Paragraph(f'<i>{stripped.strip("_")}</i>', style_meta))
+        else:
+            elements.append(Paragraph(stripped, style_body))
+
+    if not elements:
+        elements.append(Paragraph('Nenhuma ata disponível.', style_body))
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+class RecordingMinutesPDFView(APIView):
+    permission_classes = (AllowAny,)
+
+    def get(self, request, recording_id):
+        try:
+            recording = Recording.objects.get(id=recording_id)
+        except Recording.DoesNotExist:
+            return Response({'error': 'gravação não encontrada'}, status=status.HTTP_404_NOT_FOUND)
+
+        if recording.minutes_status != Recording.MINUTES_DONE or not recording.minutes_text:
+            return Response(
+                {'error': 'ata ainda não disponível', 'minutes_status': recording.minutes_status},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            pdf_bytes = _render_minutes_pdf(recording)
+        except Exception:
+            logger.exception('Erro ao gerar PDF da ata: recording_id=%s', recording_id)
+            return Response({'error': 'falha ao gerar PDF'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        room_label = recording.room_name or str(recording.id)[:8]
+        filename = f'ata-{room_label}.pdf'
+
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="{filename}"'
+        return response
 
 
 class RoomRecordingStartView(APIView):
