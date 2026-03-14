@@ -54,26 +54,67 @@ def _should_skip_scheduler_start():
     return False
 
 
-def _clear_recordings_folder_and_db():
+def _max_age_seconds():
+    env_value = os.environ.get('RECORDINGS_MAX_AGE_HOURS')
+    default_value = getattr(settings, 'RECORDINGS_MAX_AGE_HOURS', 168)  # 7 days
+    raw_value = env_value if env_value is not None else default_value
+    try:
+        hours = int(raw_value)
+    except (TypeError, ValueError):
+        hours = 168
+    return max(1, hours) * 3600
+
+
+def _clear_old_recordings():
     from calls.models import Recording
+    from django.utils import timezone as dj_timezone
+    import datetime
+
+    max_age = _max_age_seconds()
+    cutoff = dj_timezone.now() - datetime.timedelta(seconds=max_age)
 
     recordings_dir = Path(settings.MEDIA_ROOT) / 'recordings'
     recordings_dir.mkdir(parents=True, exist_ok=True)
 
+    # Delete old DB records and their files
+    old_recordings = Recording.objects.filter(
+        file__startswith='recordings/',
+        created_at__lt=cutoff,
+    )
     deleted_paths = 0
-    for path in recordings_dir.iterdir():
+    deleted_records = 0
+    for rec in old_recordings:
         try:
-            if path.is_file() or path.is_symlink():
-                path.unlink()
-                deleted_paths += 1
-            elif path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
+            if rec.file:
+                file_path = Path(settings.MEDIA_ROOT) / str(rec.file)
+                if file_path.is_file():
+                    file_path.unlink()
+                    deleted_paths += 1
+        except Exception:
+            LOGGER.exception('Falha ao remover arquivo de gravação: %s', rec.file)
+        rec.delete()
+        deleted_records += 1
+
+    # Clean orphaned files on disk (no DB record) older than max_age
+    known_files = set(Recording.objects.values_list('file', flat=True))
+    now_ts = time.time()
+    for fpath in recordings_dir.iterdir():
+        relative = f'recordings/{fpath.name}'
+        if relative in known_files:
+            continue
+        try:
+            if fpath.is_file() or fpath.is_symlink():
+                file_age = now_ts - fpath.stat().st_mtime
+                if file_age > max_age:
+                    fpath.unlink()
+                    deleted_paths += 1
+            elif fpath.is_dir():
+                shutil.rmtree(fpath, ignore_errors=True)
                 deleted_paths += 1
         except Exception:
-            LOGGER.exception('Falha ao remover caminho de gravação: %s', path)
+            LOGGER.exception('Falha ao remover caminho de gravação órfão: %s', fpath)
 
-    deleted_records, _ = Recording.objects.filter(file__startswith='recordings/').delete()
-    return deleted_paths, int(deleted_records)
+    return deleted_paths, deleted_records
 
 
 def _run_cleanup_if_due(interval_seconds):
@@ -106,12 +147,13 @@ def _run_cleanup_if_due(interval_seconds):
         if (now - last_run) < interval_seconds:
             return False
 
-        deleted_paths, deleted_records = _clear_recordings_folder_and_db()
-        LOGGER.info(
-            'Limpeza automática de gravações concluída: %s caminho(s) removido(s), %s registro(s) removido(s).',
-            deleted_paths,
-            deleted_records,
-        )
+        deleted_paths, deleted_records = _clear_old_recordings()
+        if deleted_paths or deleted_records:
+            LOGGER.info(
+                'Limpeza automática de gravações concluída: %s caminho(s) removido(s), %s registro(s) removido(s).',
+                deleted_paths,
+                deleted_records,
+            )
 
         lock_file.seek(0)
         lock_file.truncate()

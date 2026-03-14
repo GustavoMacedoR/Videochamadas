@@ -1,31 +1,36 @@
-from rest_framework import viewsets, status
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from .models import Room, Recording, RoomParticipant
-from .serializers import RoomSerializer
-from .serializers import RecordingSerializer
-from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.permissions import AllowAny
-from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import csrf_exempt
-from django.conf import settings
-from django.core.files.base import File
-from django.db.models import Q
+import json
+import logging
+import math
+import os
+import re
 from datetime import timezone as datetime_timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
-import os
-import json
-import re
-import math
+
+from django.conf import settings
+from django.core.files.base import File
+from django.db.models import Q
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import viewsets, status
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .models import Room, Recording, RoomParticipant
+from .serializers import RoomSerializer
+from .serializers import RecordingSerializer
+
+logger = logging.getLogger(__name__)
 
 from .transcription import enqueue_minutes_generation
 from .server_recording import start_server_recording, stop_server_recording, get_room_recording_status, notify_recording_ready
 
 
 MINUTES_RANGE_PATTERN = re.compile(r'\[(\d{2}:\d{2}:\d{2})-(\d{2}:\d{2}:\d{2})\]')
-ROOM_SUFFIX_FILE_PATTERN = re.compile(r'^(?P<room>.+)-\d{8}-\d{6}\.(webm|mp4|mkv)$', re.IGNORECASE)
+ROOM_SUFFIX_FILE_PATTERN = re.compile(r'^(?P<room>.+)-\d{8}-\d{6}(?:_[A-Za-z0-9]+)?\.(webm|mp4|mkv)$', re.IGNORECASE)
 ROOM_SUFFIX_UPLOAD_PATTERN = re.compile(r'^(?P<room>.+)-[0-9a-f]{32}$', re.IGNORECASE)
 
 
@@ -57,16 +62,9 @@ def _filter_recordings_queryset(request):
 
     room_obj = _resolve_room_from_identifier(room_value, create_if_missing=False)
     if room_obj is None:
-        return qs.filter(room_name__iexact=room_value)
+        return qs.filter(_build_recording_room_filters(room_value))
 
-    room_id_text = str(room_obj.id)
-    room_name_text = (room_obj.name or '').strip()
-
-    room_name_filters = Q(room_name__iexact=room_id_text)
-    if room_name_text:
-        room_name_filters |= Q(room_name__iexact=room_name_text)
-
-    return qs.filter(Q(room=room_obj) | room_name_filters)
+    return qs.filter(_build_recording_room_filters(room_value, room_obj))
 
 
 def _normalize_relative_client_url(raw_url):
@@ -177,20 +175,41 @@ def _normalize_participant_payload(raw_participant):
 def _sync_recordings_from_disk():
     recordings_dir = Path(settings.MEDIA_ROOT) / 'recordings'
     recordings_dir.mkdir(parents=True, exist_ok=True)
-    known_names = set(Recording.objects.values_list('file', flat=True))
+    recordings_by_file = {
+        str(recording.file): recording
+        for recording in Recording.objects.all()
+    }
     for fpath in sorted(recordings_dir.iterdir()):
         if fpath.suffix.lower() not in {'.webm', '.mp4', '.mkv'}:
             continue
         relative = f'recordings/{fpath.name}'
-        if relative not in known_names:
-            room_hint = _extract_room_name_hint('', fpath.name, '')
-            room_obj = _resolve_room_from_identifier(room_hint, create_if_missing=False)
+        room_hint = _extract_room_name_hint('', fpath.name, '')
+        room_obj = _resolve_room_from_identifier(room_hint, create_if_missing=False)
+        existing_recording = recordings_by_file.get(relative)
+
+        if existing_recording is None:
             try:
                 Recording.objects.create(
                     file=relative,
                     room=room_obj,
                     room_name=room_hint if room_hint else '',
                 )
+            except Exception:
+                pass
+            continue
+
+        update_fields = []
+        if room_obj is not None and existing_recording.room_id != room_obj.id:
+            existing_recording.room = room_obj
+            update_fields.append('room')
+
+        if room_hint and (existing_recording.room_name or '').strip() != room_hint:
+            existing_recording.room_name = room_hint
+            update_fields.append('room_name')
+
+        if update_fields:
+            try:
+                existing_recording.save(update_fields=update_fields)
             except Exception:
                 pass
 
@@ -211,6 +230,36 @@ def _extract_room_name_hint(room_name, filename, upload_id):
         return str(upload_match.group('room') or '').strip()
 
     return ''
+
+
+def _build_recording_room_filters(room_value, room_obj=None):
+    filters = Q()
+    candidate_values = []
+
+    normalized_room_value = str(room_value or '').strip()
+    if normalized_room_value:
+        candidate_values.append(normalized_room_value)
+
+    if room_obj is not None:
+        filters |= Q(room=room_obj)
+        candidate_values.append(str(room_obj.id))
+        room_name_text = (room_obj.name or '').strip()
+        if room_name_text:
+            candidate_values.append(room_name_text)
+
+    seen_candidates = set()
+    for candidate in candidate_values:
+        candidate_text = str(candidate or '').strip()
+        if not candidate_text:
+            continue
+        candidate_key = candidate_text.casefold()
+        if candidate_key in seen_candidates:
+            continue
+        seen_candidates.add(candidate_key)
+        filters |= Q(room_name__iexact=candidate_text)
+        filters |= Q(file__icontains=candidate_text)
+
+    return filters
 
 
 def _parse_recording_participants(recording):
@@ -612,16 +661,28 @@ class RecordingChunkUploadView(APIView):
         temp_path = temp_dir / f"{upload_id}.part"
 
         if chunk is not None:
-            with open(temp_path, 'ab') as temp_file:
-                for piece in chunk.chunks():
-                    temp_file.write(piece)
+            chunk_size = chunk.size if hasattr(chunk, 'size') else 0
+            logger.info('Chunk recebido: upload_id=%s, chunk_size=%s, is_last=%s, room=%s', upload_id, chunk_size, is_last, room_name_raw)
+            try:
+                with open(temp_path, 'ab') as temp_file:
+                    for piece in chunk.chunks():
+                        temp_file.write(piece)
+            except Exception:
+                logger.exception('Erro ao escrever chunk em disco: upload_id=%s, path=%s', upload_id, temp_path)
+                return Response({'error': 'falha ao salvar chunk no servidor'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            logger.info('Chunk upload sem dados de arquivo: upload_id=%s, is_last=%s', upload_id, is_last)
 
         if not is_last:
             current_size = temp_path.stat().st_size if temp_path.exists() else 0
             return Response({'ok': True, 'upload_id': upload_id, 'size': current_size})
 
         if not temp_path.exists() or temp_path.stat().st_size == 0:
+            logger.warning('Finalização de upload sem dados: upload_id=%s, exists=%s', upload_id, temp_path.exists())
             return Response({'error': 'nenhum dado recebido para finalizar upload'}, status=status.HTTP_400_BAD_REQUEST)
+
+        temp_size = temp_path.stat().st_size
+        logger.info('Finalizando upload: upload_id=%s, temp_size=%s bytes, filename=%s, room=%s', upload_id, temp_size, filename, room_name_raw)
 
         safe_name = os.path.basename(str(filename)) or f"recording-{uuid4().hex}.webm"
         room_name_value = _extract_room_name_hint(room_name_raw, safe_name, upload_id)
@@ -635,13 +696,18 @@ class RecordingChunkUploadView(APIView):
             except Exception:
                 participants_json = ''
 
-        with open(temp_path, 'rb') as temp_file:
-            recording = Recording.objects.create(
-                file=File(temp_file, name=safe_name),
-                room=resolved_room,
-                room_name=room_name_value or (str(resolved_room.id) if resolved_room else ''),
-                participants_json=participants_json,
-            )
+        try:
+            with open(temp_path, 'rb') as temp_file:
+                recording = Recording.objects.create(
+                    file=File(temp_file, name=safe_name),
+                    room=resolved_room,
+                    room_name=room_name_value or (str(resolved_room.id) if resolved_room else ''),
+                    participants_json=participants_json,
+                )
+            logger.info('Gravação salva: id=%s, file=%s, room=%s, room_name=%s', recording.id, recording.file.name, recording.room_id, recording.room_name)
+        except Exception:
+            logger.exception('Erro ao criar registro de gravação: upload_id=%s, filename=%s', upload_id, safe_name)
+            return Response({'error': 'falha ao salvar gravação no banco de dados'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         try:
             if temp_path.exists():
@@ -782,6 +848,7 @@ class RoomRecordingCompleteView(APIView):
             return Response({'error': 'recording inválido'}, status=status.HTTP_400_BAD_REQUEST)
 
         if recording_payload.get('error'):
+            logger.warning('Gravação do servidor com erro: room=%s, error=%s', room_name, recording_payload.get('error'))
             notify_recording_ready(room_name, {
                 'error': recording_payload.get('error'),
             })
@@ -844,5 +911,6 @@ class RoomRecordingCompleteView(APIView):
             resolved_payload.get('minutes_url') or default_minutes_url
         )
 
+        logger.info('Recording complete: room=%s, recording_id=%s, file=%s', room_name, resolved_payload.get('id'), resolved_payload.get('file'))
         notify_recording_ready(room_name, resolved_payload)
         return Response({'ok': True})

@@ -57,10 +57,15 @@
 
   <script>
     // Ajuste a URL do backend se necessário
-    // Sempre use o prefixo /video nas chamadas ao backend
+    function detectAppPrefix(){
+      if(location.protocol === 'file:') return '/video';
+      if(location.pathname === '/video' || location.pathname.startsWith('/video/')) return '/video';
+      return '';
+    }
+
     const ORIGIN = location.origin;
-    const PREFIX = '/video';
-    const BACKEND_API = (location.protocol === 'file:' ? 'http://127.0.0.1:8000' + PREFIX : (ORIGIN + PREFIX)) + '/api/rooms/';
+    const PREFIX = detectAppPrefix();
+    const BACKEND_API = ((location.protocol === 'file:') ? 'http://127.0.0.1:8000' : ORIGIN) + `${PREFIX}/api/rooms/`;
 
     const roomsEl = document.getElementById('rooms');
     const createForm = document.getElementById('createForm');

@@ -10,6 +10,7 @@ services:
       - CHANNEL_REDIS_URL=redis://redis:6379/0
       - RECORDINGS_AUTO_CLEANUP_ENABLED=1
       - RECORDINGS_AUTO_CLEANUP_INTERVAL_MINUTES=30
+      - RECORDINGS_MAX_AGE_HOURS=24
     # Bind the web service to localhost on a non-conflicting port (use 8087)
     ports:
       - "127.0.0.1:8087:8000"

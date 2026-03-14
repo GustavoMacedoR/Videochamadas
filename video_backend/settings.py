@@ -87,6 +87,36 @@ try:
     RECORDINGS_AUTO_CLEANUP_INTERVAL_MINUTES = max(1, int(os.environ.get('RECORDINGS_AUTO_CLEANUP_INTERVAL_MINUTES', '30')))
 except (TypeError, ValueError):
     RECORDINGS_AUTO_CLEANUP_INTERVAL_MINUTES = 30
+# Age-based retention: only delete recordings older than this (hours). Default: 168h = 7 days.
+try:
+    RECORDINGS_MAX_AGE_HOURS = max(1, int(os.environ.get('RECORDINGS_MAX_AGE_HOURS', '168')))
+except (TypeError, ValueError):
+    RECORDINGS_MAX_AGE_HOURS = 168
+
+# Logging
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'calls': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
 
 # Channels - use in-memory layer for simplicity (no Redis required)
 

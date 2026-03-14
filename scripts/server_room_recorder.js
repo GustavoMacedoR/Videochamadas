@@ -12,11 +12,88 @@ if (!ROOM_URL || !API_BASE || !UPLOAD_ID) {
   process.exit(1);
 }
 
+console.log('[recorder] Starting with:', { ROOM_URL, API_BASE, ROOM_NAME, UPLOAD_ID, FILE_NAME });
+
 let stopping = false;
+let shutdownRequested = false;
+let startupComplete = false;
+let browser;
+let context;
+let page;
+
+async function cleanupResources() {
+  if (context) {
+    try {
+      await context.close();
+    } catch (_) {}
+    context = null;
+  }
+
+  if (browser) {
+    try {
+      await browser.close();
+    } catch (_) {}
+    browser = null;
+  }
+}
+
+function ensureStartupNotInterrupted() {
+  if (shutdownRequested) {
+    throw new Error('Gravação interrompida antes de iniciar a captura.');
+  }
+}
+
+async function finalizeAndExit() {
+  if (stopping) return;
+  if (!startupComplete) {
+    shutdownRequested = true;
+    return;
+  }
+
+  stopping = true;
+
+  try {
+    const result = await page.evaluate(async () => {
+      const finalizeUpload = async () => {
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        await Promise.all(window.__serverUploadPromises || []);
+        return await window.__serverPostChunk(null, true);
+      };
+
+      if (window.__serverRecorder && window.__serverRecorder.state !== 'inactive') {
+        window.__serverRecorder.stop();
+        return await finalizeUpload();
+      }
+
+      if ((window.__serverUploadPromises || []).length > 0) {
+        return await finalizeUpload();
+      }
+
+      throw new Error('Gravação interrompida antes de iniciar a captura.');
+    });
+    await postComplete(result || {});
+  } catch (err) {
+    await postComplete({ error: err && err.message ? err.message : 'Falha ao finalizar gravação no servidor.' });
+  }
+
+  await cleanupResources();
+  process.exit(0);
+}
+
+function requestShutdown() {
+  shutdownRequested = true;
+  if (startupComplete) {
+    void finalizeAndExit();
+  }
+}
+
+process.on('SIGTERM', requestShutdown);
+process.on('SIGINT', requestShutdown);
 
 async function postComplete(payload) {
+  console.log('[recorder] postComplete:', JSON.stringify(payload));
   try {
-    await fetch(`${API_BASE}/recordings/server/complete/`, {
+    const res = await fetch(`${API_BASE}/recordings/server/complete/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -24,26 +101,40 @@ async function postComplete(payload) {
         recording: payload || {},
       }),
     });
-  } catch (_) {}
+    const text = await res.text().catch(() => '');
+    console.log('[recorder] postComplete response:', res.status, text);
+  } catch (err) {
+    console.error('[recorder] postComplete FAILED:', err && err.message ? err.message : err);
+  }
 }
 
 (async () => {
-  let browser;
-  let context;
-  let page;
-
   try {
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox']
     });
+    ensureStartupNotInterrupted();
     context = await browser.newContext({ permissions: ['microphone', 'camera'] });
+    ensureStartupNotInterrupted();
     page = await context.newPage();
+    ensureStartupNotInterrupted();
 
+    // Forward browser console to Node stdout for debugging
+    page.on('console', msg => console.log('[page]', msg.type(), msg.text()));
+    page.on('pageerror', err => console.error('[page error]', err.message));
+    page.on('requestfailed', req => console.error('[page req failed]', req.url(), req.failure()?.errorText));
+
+    console.log('[recorder] Navigating to', ROOM_URL);
     await page.goto(ROOM_URL);
+    ensureStartupNotInterrupted();
+    console.log('[recorder] Page loaded, filling room input:', ROOM_NAME);
     await page.fill('#roomInput', ROOM_NAME);
+    ensureStartupNotInterrupted();
     await page.click('#connectBtn');
+    console.log('[recorder] Clicked connect, waiting 5s for room setup...');
     await page.waitForTimeout(5000);
+    ensureStartupNotInterrupted();
 
     await page.evaluate(async ({ apiBase, uploadId, fileName, participants, roomName }) => {
     window.__serverUploadPromises = [];
@@ -95,36 +186,13 @@ async function postComplete(payload) {
     participants: PARTICIPANTS,
     roomName: ROOM_NAME,
     });
-
-    const finalizeAndExit = async () => {
-      if (stopping) return;
-      stopping = true;
-
-      try {
-        const result = await page.evaluate(async () => {
-          if (window.__serverRecorder && window.__serverRecorder.state !== 'inactive') {
-            window.__serverRecorder.stop();
-          }
-          await new Promise(resolve => setTimeout(resolve, 1200));
-          await Promise.all(window.__serverUploadPromises || []);
-          return await window.__serverPostChunk(null, true);
-        });
-        await postComplete(result || {});
-      } catch (err) {
-        await postComplete({ error: err && err.message ? err.message : 'Falha ao finalizar gravação no servidor.' });
-      }
-
-      if (context) await context.close();
-      if (browser) await browser.close();
-      process.exit(0);
-    };
-
-    process.on('SIGTERM', finalizeAndExit);
-    process.on('SIGINT', finalizeAndExit);
+    startupComplete = true;
+    if (shutdownRequested) {
+      await finalizeAndExit();
+    }
   } catch (err) {
     await postComplete({ error: err && err.message ? err.message : 'Falha ao iniciar gravador no servidor.' });
-    if (context) await context.close();
-    if (browser) await browser.close();
+    await cleanupResources();
     process.exit(1);
   }
 })();
