@@ -100,6 +100,8 @@ def start_server_recording(room_name, started_by='server'):
             'UPLOAD_ID': upload_id,
             'FILE_NAME': file_name,
             'PARTICIPANTS_JSON': '[]',
+            'RECORDER_NAME': 'Gravador',
+            'RECORDER_ROLE': 'gravador',
         })
 
         logger.info(

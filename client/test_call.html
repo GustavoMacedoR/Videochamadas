@@ -130,10 +130,25 @@
     let _lastReadyRecordingId = '';
     // Chat
     let _chatName = '';
+    let _clientRoles = [];
     const _chatMessages = []; // keep a brief in-memory log for the session
     // Raise hand / speak queue
     let _handQueue = [];        // [{clientId, name}] in raise order
     let _myHandRaised = false;
+
+    // Support injecting name and role via URL params (used by the server recorder)
+    (function applyUrlParams(){
+      const params = new URLSearchParams(location.search);
+      const pName = params.get('name');
+      const pRole = params.get('role');
+      if(pName){
+        const nameInput = document.getElementById('chatNameInput');
+        if(nameInput) nameInput.value = pName;
+      }
+      if(pRole){
+        _clientRoles = pRole.split(',').map(r => r.trim()).filter(Boolean);
+      }
+    })();
 
     let __fakeMedia = null; // resources for fake media
 
@@ -385,7 +400,7 @@
         document.getElementById('raiseHandBtn').classList.remove('raised');
         renderHandQueue();
         // announce ourselves to the room so existing peers will create offers
-        sendMessage({type: 'join', client_id: clientId, name: _chatName});
+        sendMessage({type: 'join', client_id: clientId, name: _chatName, roles: _clientRoles.length ? _clientRoles : undefined});
       };
       ws.onclose = () => { console.log('WS closed'); document.getElementById('status').textContent = 'WS: closed'; };
       ws.onerror = (e) => { console.error('WS error', e); document.getElementById('status').textContent = 'WS: error'; };

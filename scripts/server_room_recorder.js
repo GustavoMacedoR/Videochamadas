@@ -6,6 +6,8 @@ const ROOM_NAME = process.env.ROOM_NAME || 'testroom';
 const UPLOAD_ID = process.env.UPLOAD_ID;
 const FILE_NAME = process.env.FILE_NAME || `recording-${Date.now()}.webm`;
 const PARTICIPANTS = process.env.PARTICIPANTS_JSON || '[]';
+const RECORDER_NAME = process.env.RECORDER_NAME || 'Gravador';
+const RECORDER_ROLE = process.env.RECORDER_ROLE || 'gravador';
 
 if (!ROOM_URL || !API_BASE || !UPLOAD_ID) {
   console.error('Missing required env vars: ROOM_URL, API_BASE, UPLOAD_ID');
@@ -157,10 +159,16 @@ async function postComplete(payload) {
     page.on('pageerror', err => console.error('[page error]', err.message));
     page.on('requestfailed', req => console.error('[page req failed]', req.url(), req.failure()?.errorText));
 
-    console.log('[recorder] Navigating to', ROOM_URL);
-    await page.goto(ROOM_URL);
+    // Build URL with recorder name and role as query params
+    const recorderUrl = new URL(ROOM_URL);
+    recorderUrl.searchParams.set('room', ROOM_NAME);
+    recorderUrl.searchParams.set('name', RECORDER_NAME);
+    recorderUrl.searchParams.set('role', RECORDER_ROLE);
+    console.log('[recorder] Navigating to', recorderUrl.href);
+    await page.goto(recorderUrl.href);
     ensureStartupNotInterrupted();
     console.log('[recorder] Page loaded, filling room input:', ROOM_NAME);
+    await page.fill('#chatNameInput', RECORDER_NAME);
     await page.fill('#roomInput', ROOM_NAME);
     ensureStartupNotInterrupted();
     await page.click('#connectBtn');
