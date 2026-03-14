@@ -54,6 +54,10 @@ async function finalizeAndExit() {
 
   try {
     const result = await page.evaluate(async () => {
+      // Stop canvas draw & audio-check intervals
+      if (window.__serverGridInterval) clearInterval(window.__serverGridInterval);
+      if (window.__serverAudioCheckInterval) clearInterval(window.__serverAudioCheckInterval);
+
       const finalizeUpload = async () => {
         await new Promise(resolve => setTimeout(resolve, 1200));
         await Promise.all(window.__serverUploadPromises || []);
@@ -181,25 +185,91 @@ async function postComplete(payload) {
       return json;
     };
 
-    const waitForVideo = async () => {
+    // -- Canvas grid compositing: record ALL participants --
+    const CANVAS_W = 1280;
+    const CANVAS_H = 720;
+    const canvas = document.createElement('canvas');
+    canvas.width = CANVAS_W;
+    canvas.height = CANVAS_H;
+    const ctx = canvas.getContext('2d');
+
+    function getAllVideos() {
+      const vids = [];
+      const local = document.querySelector('#localVideo');
+      if (local && local.srcObject) vids.push(local);
+      document.querySelectorAll('#remoteContainer video').forEach(v => {
+        if (v.srcObject) vids.push(v);
+      });
+      return vids;
+    }
+
+    // Wait until at least one video stream is available
+    const waitForAnyVideo = async () => {
       const timeoutAt = Date.now() + 15000;
       while (Date.now() < timeoutAt) {
-        const remote = document.querySelector('#remoteContainer video');
-        if (remote && remote.srcObject) return remote;
-        const local = document.querySelector('#localVideo');
-        if (local && local.srcObject) return local;
+        if (getAllVideos().length > 0) return true;
         await new Promise(resolve => setTimeout(resolve, 300));
       }
-      return null;
+      return false;
     };
 
-    const videoEl = await waitForVideo();
-    if (!videoEl) throw new Error('Nenhum stream de vídeo disponível para gravar na sala.');
+    const hasVideo = await waitForAnyVideo();
+    if (!hasVideo) throw new Error('Nenhum stream de vídeo disponível para gravar na sala.');
 
-    const stream = videoEl.captureStream ? videoEl.captureStream() : (videoEl.mozCaptureStream ? videoEl.mozCaptureStream() : null);
-    if (!stream) throw new Error('Falha ao capturar stream.');
+    // Draw grid layout onto canvas at ~30fps
+    function drawFrame() {
+      const videos = getAllVideos();
+      const n = videos.length || 1;
+      const cols = Math.ceil(Math.sqrt(n));
+      const rows = Math.ceil(n / cols);
+      const cellW = CANVAS_W / cols;
+      const cellH = CANVAS_H / rows;
 
-    window.__serverRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      videos.forEach((v, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const x = col * cellW;
+        const y = row * cellH;
+        try {
+          ctx.drawImage(v, x, y, cellW, cellH);
+        } catch (_) {}
+      });
+    }
+
+    window.__serverGridInterval = setInterval(drawFrame, 33); // ~30fps
+    drawFrame();
+
+    // Capture canvas stream with audio mixed from all videos
+    const audioCtx = new AudioContext();
+    const destination = audioCtx.createMediaStreamDestination();
+    let audioAttached = 0;
+
+    function attachAudioSources() {
+      const videos = getAllVideos();
+      videos.forEach(v => {
+        if (v.__audioAttached) return;
+        try {
+          const src = audioCtx.createMediaElementSource(v);
+          src.connect(destination);
+          src.connect(audioCtx.destination); // keep audible in browser too
+          v.__audioAttached = true;
+          audioAttached++;
+        } catch (_) {} // already attached or no audio track
+      });
+    }
+
+    attachAudioSources();
+    // Periodically check for new participants joining
+    window.__serverAudioCheckInterval = setInterval(attachAudioSources, 2000);
+
+    const canvasStream = canvas.captureStream(30);
+    // Add mixed audio track to the canvas stream
+    destination.stream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+
+    window.__serverRecorder = new MediaRecorder(canvasStream, { mimeType: 'video/webm;codecs=vp8,opus' });
     window.__serverRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size) {
         const p = window.__serverPostChunk(event.data, false);
