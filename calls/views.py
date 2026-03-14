@@ -6,7 +6,7 @@ import os
 import re
 from datetime import timezone as datetime_timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from uuid import UUID, uuid4
 
 from django.conf import settings
@@ -34,6 +34,7 @@ from .server_recording import start_server_recording, stop_server_recording, get
 MINUTES_RANGE_PATTERN = re.compile(r'\[(\d{2}:\d{2}:\d{2})-(\d{2}:\d{2}:\d{2})\]')
 ROOM_SUFFIX_FILE_PATTERN = re.compile(r'^(?P<room>.+)-\d{8}-\d{6}(?:_[A-Za-z0-9]+)?\.(webm|mp4|mkv)$', re.IGNORECASE)
 ROOM_SUFFIX_UPLOAD_PATTERN = re.compile(r'^(?P<room>.+)-[0-9a-f]{32}$', re.IGNORECASE)
+FORWARDED_PROTO_PATTERN = re.compile(r'(?:^|[;,]\s*)proto="?(https?)"?', re.IGNORECASE)
 
 
 def _filter_rooms_queryset(request):
@@ -90,6 +91,51 @@ def _normalize_relative_client_url(raw_url):
     if parsed.fragment:
         path = f'{path}#{parsed.fragment}'
     return path or value
+
+
+def _get_forwarded_scheme(request):
+    if request is None:
+        return None
+
+    try:
+        forwarded_proto = str(request.META.get('HTTP_X_FORWARDED_PROTO', '') or '').split(',')[0].strip().lower()
+    except Exception:
+        forwarded_proto = ''
+    if forwarded_proto in {'http', 'https'}:
+        return forwarded_proto
+
+    try:
+        forwarded = str(request.META.get('HTTP_FORWARDED', '') or '')
+    except Exception:
+        forwarded = ''
+    match = FORWARDED_PROTO_PATTERN.search(forwarded)
+    if match:
+        return match.group(1).lower()
+    return None
+
+
+def _build_external_uri(request, location):
+    if not location or request is None:
+        return location
+
+    try:
+        absolute_url = request.build_absolute_uri(location)
+    except Exception:
+        return location
+
+    forwarded_scheme = _get_forwarded_scheme(request)
+    if forwarded_scheme not in {'http', 'https'}:
+        return absolute_url
+
+    try:
+        parsed = urlparse(absolute_url)
+    except Exception:
+        return absolute_url
+
+    if not parsed.netloc or parsed.scheme == forwarded_scheme:
+        return absolute_url
+
+    return urlunparse((forwarded_scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
 
 
 def _format_datetime_iso8601(value):
@@ -474,7 +520,7 @@ class RomsListView(APIView):
                 recording_download_url = None
                 if recording.file:
                     try:
-                        recording_download_url = request.build_absolute_uri(recording.file.url)
+                        recording_download_url = _build_external_uri(request, recording.file.url)
                     except Exception:
                         recording_download_url = recording.file.url
 
@@ -489,7 +535,7 @@ class RomsListView(APIView):
                 if recording.minutes_text or recording.minutes_generated_at or recording.minutes_status == Recording.MINUTES_DONE:
                     ata_download_url = None
                     try:
-                        ata_download_url = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/')
+                        ata_download_url = _build_external_uri(request, f'/video/api/recordings/{recording.id}/minutes/')
                     except Exception:
                         ata_download_url = f'/video/api/recordings/{recording.id}/minutes/'
                     atas_payload.append({
@@ -597,7 +643,7 @@ class RecordingUploadView(APIView):
             payload = serializer.data
             payload['room_id'] = str(recording.room_id) if recording.room_id else None
             payload['minutes_status'] = recording.minutes_status
-            payload['minutes_url'] = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/')
+            payload['minutes_url'] = _build_external_uri(request, f'/video/api/recordings/{recording.id}/minutes/')
             return Response(payload, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -620,12 +666,12 @@ class RecordingUploadView(APIView):
             minutes_url = None
             if file_url and request is not None:
                 try:
-                    file_url = request.build_absolute_uri(file_url)
+                    file_url = _build_external_uri(request, file_url)
                 except Exception:
                     pass
             if request is not None:
                 try:
-                    minutes_url = request.build_absolute_uri(f'/video/api/recordings/{r.id}/minutes/')
+                    minutes_url = _build_external_uri(request, f'/video/api/recordings/{r.id}/minutes/')
                 except Exception:
                     minutes_url = None
             data.append({
@@ -721,12 +767,12 @@ class RecordingChunkUploadView(APIView):
         minutes_url = None
         if file_url and request is not None:
             try:
-                file_url = request.build_absolute_uri(file_url)
+                file_url = _build_external_uri(request, file_url)
             except Exception:
                 pass
         if request is not None:
             try:
-                minutes_url = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/')
+                minutes_url = _build_external_uri(request, f'/video/api/recordings/{recording.id}/minutes/')
             except Exception:
                 minutes_url = None
 
@@ -757,14 +803,14 @@ class RecordingMinutesView(APIView):
         file_url = recording.file.url if recording.file else None
         if file_url:
             try:
-                file_url = request.build_absolute_uri(file_url)
+                file_url = _build_external_uri(request, file_url)
             except Exception:
                 pass
 
         pdf_url = None
         if recording.minutes_status == Recording.MINUTES_DONE and recording.minutes_text:
             try:
-                pdf_url = request.build_absolute_uri(f'/video/api/recordings/{recording.id}/minutes/pdf/')
+                pdf_url = _build_external_uri(request, f'/video/api/recordings/{recording.id}/minutes/pdf/')
             except Exception:
                 pdf_url = f'/video/api/recordings/{recording.id}/minutes/pdf/'
 
