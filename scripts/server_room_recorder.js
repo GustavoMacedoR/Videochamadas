@@ -73,7 +73,10 @@ async function finalizeAndExit() {
     });
     await postComplete(result || {});
   } catch (err) {
-    await postComplete({ error: err && err.message ? err.message : 'Falha ao finalizar gravação no servidor.' });
+    console.error('[recorder] page.evaluate failed:', err && err.message ? err.message : err);
+    // Browser closed before we could finalize via page — send is_last=1 directly from Node
+    const fallbackResult = await finalizeUploadFromNode();
+    await postComplete(fallbackResult);
   }
 
   await cleanupResources();
@@ -89,6 +92,31 @@ function requestShutdown() {
 
 process.on('SIGTERM', requestShutdown);
 process.on('SIGINT', requestShutdown);
+
+async function finalizeUploadFromNode() {
+  console.log('[recorder] Fallback: finalizing upload directly from Node.js');
+  try {
+    const params = new URLSearchParams();
+    params.append('upload_id', UPLOAD_ID);
+    params.append('filename', FILE_NAME);
+    params.append('room_name', ROOM_NAME);
+    params.append('is_last', '1');
+    params.append('participants', PARTICIPANTS);
+    const res = await fetch(`${API_BASE}/recordings/chunk/`, {
+      method: 'POST',
+      body: params,
+    });
+    const json = await res.json().catch(() => ({}));
+    console.log('[recorder] Fallback finalize response:', res.status, JSON.stringify(json));
+    if (!res.ok) {
+      return { error: json.error || `HTTP ${res.status}` };
+    }
+    return json;
+  } catch (err) {
+    console.error('[recorder] Fallback finalize FAILED:', err && err.message ? err.message : err);
+    return { error: err && err.message ? err.message : 'Falha ao finalizar upload via fallback.' };
+  }
+}
 
 async function postComplete(payload) {
   console.log('[recorder] postComplete:', JSON.stringify(payload));
